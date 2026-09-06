@@ -1,0 +1,54 @@
+const std = @import("std");
+
+pub const fetch_tests = @import("./fetch_tests.zig");
+pub const client_tests = @import("./client_tests.zig");
+pub const snowflake_tests = @import("./snowflake_tests.zig");
+pub const util_tests = @import("./util_tests.zig");
+pub const schema_tests = @import("./schema_tests.zig");
+pub const gateway_tests = @import("./gateway_tests.zig");
+pub const events_tests = @import("./events_tests.zig");
+pub const intents_tests = @import("./intents_tests.zig");
+pub const websockets_tests = @import("./websockets_tests.zig");
+pub const session_tests = @import("./session_tests.zig");
+pub const heartbeat_tests = @import("./heartbeat_tests.zig");
+pub const cache_tests = @import("./cache_tests.zig");
+pub const embed_tests = @import("./embed_tests.zig");
+pub const slash_tests = @import("./slash_tests.zig");
+pub const message_tests = @import("./message_tests.zig");
+pub const components_tests = @import("./components_tests.zig");
+pub const permission_tests = @import("./permission_tests.zig");
+pub const poll_tests = @import("./poll_tests.zig");
+pub const attachment_tests = @import("./attachment_tests.zig");
+pub const voice_tests = @import("./voice_tests.zig");
+pub const formatters_tests = @import("./formatters_tests.zig");
+pub const cdn_tests = @import("./cdn_tests.zig");
+pub const collector_tests = @import("./collector_tests.zig");
+pub const gateway_presence_tests = @import("./gateway_presence_tests.zig");
+
+test {
+    std.testing.refAllDecls(@This());
+    _ = fetch_tests;
+    _ = client_tests;
+    _ = snowflake_tests;
+    _ = util_tests;
+    _ = schema_tests;
+    _ = gateway_tests;
+    _ = events_tests;
+    _ = intents_tests;
+    _ = websockets_tests;
+    _ = session_tests;
+    _ = heartbeat_tests;
+    _ = cache_tests;
+    _ = embed_tests;
+    _ = slash_tests;
+    _ = message_tests;
+    _ = components_tests;
+    _ = permission_tests;
+    _ = poll_tests;
+    _ = attachment_tests;
+    _ = voice_tests;
+    _ = formatters_tests;
+    _ = cdn_tests;
+    _ = collector_tests;
+    _ = gateway_presence_tests;
+}
