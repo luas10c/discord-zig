@@ -176,27 +176,118 @@ pub const Embed = struct {
     thumbnail: ?EmbedImage = null,
     fields: []const EmbedField = &.{},
     timestamp: ?[]const u8 = null,
+
+    pub fn jsonStringify(self: Embed, jw: anytype) !void {
+        try jw.beginObject();
+        if (self.title) |t| {
+            try jw.objectField("title");
+            try jw.write(t);
+        }
+        if (self.description) |d| {
+            try jw.objectField("description");
+            try jw.write(d);
+        }
+        if (self.url) |u| {
+            try jw.objectField("url");
+            try jw.write(u);
+        }
+        if (self.timestamp) |ts| {
+            try jw.objectField("timestamp");
+            try jw.write(ts);
+        }
+        if (self.color) |c| {
+            try jw.objectField("color");
+            try jw.write(c);
+        }
+        if (self.footer) |f| {
+            try jw.objectField("footer");
+            try jw.write(f);
+        }
+        if (self.image) |img| {
+            try jw.objectField("image");
+            try jw.write(img);
+        }
+        if (self.thumbnail) |th| {
+            try jw.objectField("thumbnail");
+            try jw.write(th);
+        }
+        if (self.author) |a| {
+            try jw.objectField("author");
+            try jw.write(a);
+        }
+        if (self.fields.len > 0) {
+            try jw.objectField("fields");
+            try jw.write(self.fields);
+        }
+        try jw.endObject();
+    }
 };
 
 pub const EmbedAuthor = struct {
     name: []const u8 = "",
     url: ?[]const u8 = null,
     icon_url: ?[]const u8 = null,
+
+    pub fn jsonStringify(self: EmbedAuthor, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("name");
+        try jw.write(self.name);
+        if (self.url) |u| {
+            try jw.objectField("url");
+            try jw.write(u);
+        }
+        if (self.icon_url) |i| {
+            try jw.objectField("icon_url");
+            try jw.write(i);
+        }
+        try jw.endObject();
+    }
 };
 
 pub const EmbedFooter = struct {
     text: []const u8 = "",
     icon_url: ?[]const u8 = null,
+
+    pub fn jsonStringify(self: EmbedFooter, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("text");
+        try jw.write(self.text);
+        if (self.icon_url) |i| {
+            try jw.objectField("icon_url");
+            try jw.write(i);
+        }
+        try jw.endObject();
+    }
 };
 
 pub const EmbedImage = struct {
     url: []const u8 = "",
+
+    pub fn jsonStringify(self: EmbedImage, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("url");
+        try jw.write(self.url);
+        try jw.endObject();
+    }
 };
 
 pub const EmbedField = struct {
     name: []const u8 = "",
     value: []const u8 = "",
     @"inline": bool = false,
+
+    pub fn jsonStringify(self: EmbedField, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("name");
+        try jw.write(self.name);
+        try jw.objectField("value");
+        try jw.write(self.value);
+        if (self.@"inline") {
+            try jw.objectField("inline");
+            try jw.write(true);
+        }
+        try jw.endObject();
+    }
 };
 
 pub const Message = struct {
@@ -1343,5 +1434,5 @@ pub fn parse(comptime T: type, allocator: std.mem.Allocator, body: []const u8) !
 }
 
 pub fn stringify(allocator: std.mem.Allocator, value: anytype) ![]u8 {
-    return std.json.Stringify.valueAlloc(allocator, value, .{});
+    return std.json.Stringify.valueAlloc(allocator, value, .{ .emit_null_optional_fields = false });
 }

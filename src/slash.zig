@@ -428,7 +428,7 @@ fn writeMessageFields(jw: anytype, content: ?[]const u8, bits: u32, embeds: []co
 fn dataBody(allocator: std.mem.Allocator, content: ?[]const u8, bits: u32, embeds: []const schema.Embed, components: []const schema.Component, poll: ?schema.PollCreate, files: []const attachment_mod.Attachment) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
-    var jw: std.json.Stringify = .{ .writer = &out.writer, .options = .{} };
+    var jw: std.json.Stringify = .{ .writer = &out.writer, .options = .{ .emit_null_optional_fields = false } };
     try jw.beginObject();
     try writeMessageFields(&jw, content, bits, embeds, components, poll, files);
     try jw.endObject();
@@ -438,7 +438,7 @@ fn dataBody(allocator: std.mem.Allocator, content: ?[]const u8, bits: u32, embed
 fn callbackBody(allocator: std.mem.Allocator, response_type: u8, content: ?[]const u8, bits: u32, embeds: []const schema.Embed, components: []const schema.Component, poll: ?schema.PollCreate, files: []const attachment_mod.Attachment) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
-    var jw: std.json.Stringify = .{ .writer = &out.writer, .options = .{} };
+    var jw: std.json.Stringify = .{ .writer = &out.writer, .options = .{ .emit_null_optional_fields = false } };
     try jw.beginObject();
     try jw.objectField("type");
     try jw.write(response_type);

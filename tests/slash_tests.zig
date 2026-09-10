@@ -576,7 +576,7 @@ test "interaction handle followUp fetchReply delete autocomplete" {
     const fu = &setup.ctx.reqs[0];
     try std.testing.expectEqualStrings("POST", fu.methodStr());
     try std.testing.expectEqualStrings("/webhooks/APP/TKN", fu.pathStr());
-    try std.testing.expectEqualStrings("{\"content\":\"hi\",\"embeds\":[{\"title\":\"t\",\"description\":null,\"url\":null,\"color\":null,\"author\":null,\"footer\":null,\"image\":null,\"thumbnail\":null,\"fields\":[],\"timestamp\":null}]}", fu.bodyStr());
+    try std.testing.expectEqualStrings("{\"content\":\"hi\",\"embeds\":[{\"title\":\"t\"}]}", fu.bodyStr());
 
     const get = &setup.ctx.reqs[1];
     try std.testing.expectEqualStrings("GET", get.methodStr());

@@ -532,7 +532,7 @@ pub const Rest = struct {
     pub fn messageCreateBody(allocator: std.mem.Allocator, opts: MessageCreate) ![]u8 {
         var out: std.Io.Writer.Allocating = .init(allocator);
         errdefer out.deinit();
-        var jw: std.json.Stringify = .{ .writer = &out.writer, .options = .{} };
+        var jw: std.json.Stringify = .{ .writer = &out.writer, .options = .{ .emit_null_optional_fields = false } };
         try jw.beginObject();
         if (opts.content) |c| {
             try jw.objectField("content");
