@@ -949,3 +949,54 @@ test "parse real component interaction payload from discord" {
     try std.testing.expectEqual(@as(u8, 2), data.component_type.?);
 }
 
+test "modal submit with action row getSelectedValues" {
+    const raw =
+        \\{
+        \\  "version": 1,
+        \\  "type": 5,
+        \\  "token": "tok",
+        \\  "id": "111",
+        \\  "application_id": "222",
+        \\  "data": {
+        \\    "custom_id": "roles_settings_modal",
+        \\    "components": [
+        \\      {
+        \\        "type": 1,
+        \\        "components": [
+        \\          {
+        \\            "type": 8,
+        \\            "custom_id": "reaction_roles_channel",
+        \\            "values": ["1281291889538105477"]
+        \\          }
+        \\        ]
+        \\      },
+        \\      {
+        \\        "type": 18,
+        \\        "component": {
+        \\          "type": 6,
+        \\          "custom_id": "autorole_roles",
+        \\          "values": ["999888777"]
+        \\        }
+        \\      }
+        \\    ]
+        \\  }
+        \\}
+    ;
+    var parsed_json = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, raw, .{});
+    defer parsed_json.deinit();
+
+    var parsed_inter = try std.json.parseFromValue(schema.Interaction, std.testing.allocator, parsed_json.value, .{ .ignore_unknown_fields = true });
+    defer parsed_inter.deinit();
+
+    const data = parsed_inter.value.data.?;
+    const rr_vals = data.getSelectedValues("reaction_roles_channel");
+    try std.testing.expect(rr_vals != null);
+    try std.testing.expectEqual(@as(usize, 1), rr_vals.?.len);
+    try std.testing.expectEqualStrings("1281291889538105477", rr_vals.?[0]);
+
+    const auto_vals = data.getSelectedValues("autorole_roles");
+    try std.testing.expect(auto_vals != null);
+    try std.testing.expectEqual(@as(usize, 1), auto_vals.?.len);
+    try std.testing.expectEqualStrings("999888777", auto_vals.?[0]);
+}
+

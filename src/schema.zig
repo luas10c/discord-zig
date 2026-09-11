@@ -837,11 +837,8 @@ pub const InteractionData = struct {
 
     pub fn getTextInput(self: InteractionData, custom_id: []const u8) ?[]const u8 {
         for (self.components) |row| {
-            if (row.type == @intFromEnum(ComponentType.label)) {
-                const input = row.label_child orelse continue;
-                if (input.type != @intFromEnum(ComponentType.text_input)) continue;
+            if (row.label_child) |input| {
                 if (std.mem.eql(u8, input.custom_id, custom_id)) return input.value;
-                continue;
             }
             for (row.components) |input| {
                 if (std.mem.eql(u8, input.custom_id, custom_id)) return input.value;
@@ -852,15 +849,12 @@ pub const InteractionData = struct {
 
     pub fn getSelectedValues(self: InteractionData, custom_id: []const u8) ?[]const []const u8 {
         for (self.components) |row| {
-            if (row.type != @intFromEnum(ComponentType.label)) continue;
-            const input = row.label_child orelse continue;
-            const kind: ComponentType = @enumFromInt(input.type);
-            switch (kind) {
-                .string_select, .user_select, .role_select, .mentionable_select, .channel_select => {},
-                else => continue,
+            if (row.label_child) |input| {
+                if (std.mem.eql(u8, input.custom_id, custom_id)) return input.values;
             }
-            if (!std.mem.eql(u8, input.custom_id, custom_id)) continue;
-            return input.values;
+            for (row.components) |input| {
+                if (std.mem.eql(u8, input.custom_id, custom_id)) return input.values;
+            }
         }
         return null;
     }
