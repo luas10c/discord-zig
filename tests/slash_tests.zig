@@ -541,6 +541,162 @@ test "interaction types parse with guards and helpers" {
     try std.testing.expect(parsed_ping.value.isPing());
 }
 
+test "interaction data with null fields parses safely" {
+    const json =
+        \\{
+        \\  "id": "1",
+        \\  "application_id": "2",
+        \\  "type": 3,
+        \\  "token": "t",
+        \\  "data": {
+        \\    "name": null,
+        \\    "type": null,
+        \\    "custom_id": "settings_btn:general",
+        \\    "component_type": 2,
+        \\    "values": null,
+        \\    "options": null,
+        \\    "components": null
+        \\  },
+        \\  "member": {
+        \\    "user": {
+        \\      "id": "123",
+        \\      "username": "luas10c",
+        \\      "discriminator": null
+        \\    },
+        \\    "guild_id": null,
+        \\    "joined_at": null,
+        \\    "roles": null
+        \\  },
+        \\  "message": {
+        \\    "id": "999",
+        \\    "channel_id": "888",
+        \\    "author": null,
+        \\    "content": null,
+        \\    "embeds": null,
+        \\    "attachments": null
+        \\  }
+        \\}
+    ;
+    var parsed = try schema.parse(schema.Interaction, std.testing.allocator, json);
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value.isComponent());
+    try std.testing.expectEqualStrings("settings_btn:general", parsed.value.data.?.custom_id.?);
+    try std.testing.expectEqualStrings("", parsed.value.data.?.name);
+    try std.testing.expectEqual(@as(u8, 0), parsed.value.data.?.type);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.data.?.values.len);
+    try std.testing.expectEqualStrings("0", parsed.value.member.?.user.?.discriminator);
+    try std.testing.expectEqualStrings("", parsed.value.member.?.guild_id);
+}
+
+test "message component interaction parses with real discord payload" {
+    const json =
+        \\{
+        \\  "app_permissions": "1071698660929",
+        \\  "application_id": "123456789",
+        \\  "authorizing_integration_owners": { "0": "1098316516774129684" },
+        \\  "channel": { "id": "111", "type": 0 },
+        \\  "channel_id": "111",
+        \\  "context": 0,
+        \\  "data": {
+        \\    "component_type": 2,
+        \\    "custom_id": "settings_btn:general"
+        \\  },
+        \\  "entitlement_sku_ids": [],
+        \\  "entitlements": [],
+        \\  "guild": { "id": "1098316516774129684" },
+        \\  "guild_id": "1098316516774129684",
+        \\  "guild_locale": "pt-BR",
+        \\  "id": "999888777",
+        \\  "locale": "pt-BR",
+        \\  "member": {
+        \\    "avatar": null,
+        \\    "communication_disabled_until": null,
+        \\    "deaf": false,
+        \\    "flags": 0,
+        \\    "joined_at": "2023-01-01T00:00:00.000000+00:00",
+        \\    "mute": false,
+        \\    "nick": null,
+        \\    "pending": false,
+        \\    "permissions": "8",
+        \\    "premium_since": null,
+        \\    "roles": [],
+        \\    "unusual_dm_activity_until": null,
+        \\    "user": {
+        \\      "avatar": "abc",
+        \\      "avatar_decoration_data": null,
+        \\      "bot": false,
+        \\      "clan": null,
+        \\      "discriminator": "0",
+        \\      "global_name": "Luciano",
+        \\      "id": "333",
+        \\      "public_flags": 0,
+        \\      "username": "luas10c"
+        \\    }
+        \\  },
+        \\  "message": {
+        \\    "attachments": [],
+        \\    "author": {
+        \\      "avatar": "def",
+        \\      "avatar_decoration_data": null,
+        \\      "bot": true,
+        \\      "clan": null,
+        \\      "discriminator": "0000",
+        \\      "global_name": null,
+        \\      "id": "123456789",
+        \\      "public_flags": 0,
+        \\      "username": "BamBam"
+        \\    },
+        \\    "channel_id": "111",
+        \\    "components": [
+        \\      {
+        \\        "type": 1,
+        \\        "components": [
+        \\          {
+        \\            "type": 2,
+        \\            "style": 2,
+        \\            "label": "⚙️ Geral",
+        \\            "custom_id": "settings_btn:general"
+        \\          }
+        \\        ]
+        \\      }
+        \\    ],
+        \\    "content": "",
+        \\    "edited_timestamp": null,
+        \\    "embeds": [
+        \\      {
+        \\        "color": 5793266,
+        \\        "description": "Visualize o status...",
+        \\        "fields": [
+        \\          {
+        \\            "inline": false,
+        \\            "name": "⚙️ Configurações Gerais",
+        \\            "value": "• **Boas-Vindas:** <#123>\n• **Saída:** <#456>"
+        \\          }
+        \\        ],
+        \\        "title": "⚙️ Painel de Configurações do Servidor",
+        \\        "type": "rich"
+        \\      }
+        \\    ],
+        \\    "flags": 64,
+        \\    "id": "888777666",
+        \\    "mention_everyone": false,
+        \\    "mention_roles": [],
+        \\    "mentions": [],
+        \\    "pinned": false,
+        \\    "timestamp": "2026-09-10T21:00:00.000000+00:00",
+        \\    "tts": false,
+        \\    "type": 0
+        \\  },
+        \\  "token": "aW50ZX...",
+        \\  "type": 3,
+        \\  "version": 1
+        \\}
+    ;
+    var parsed = try schema.parse(schema.Interaction, std.testing.allocator, json);
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value.isComponent());
+}
+
 test "interaction handle followUp fetchReply delete autocomplete" {
     const allocator = std.testing.allocator;
     const setup = try withInteractionMock(6);
@@ -775,3 +931,21 @@ test "update and deferUpdate send types 7 and 6" {
     try std.testing.expectEqualStrings("{\"type\":6}", setup.ctx.reqs[0].bodyStr());
     try std.testing.expectEqualStrings("{\"type\":7,\"data\":{\"content\":\"edited\"}}", setup.ctx.reqs[1].bodyStr());
 }
+
+test "parse real component interaction payload from discord" {
+    const raw =
+        \\{"version":1,"type":3,"token":"aW50ZXJhY3Rpb246MTU0Nzc3MzIwODY3NjAxNjI3ODowWm5Xd3FGWHpZaVRKNHZGcm50SVdQQ0hSMnk2U2lnaTEzSUo5SjhtbDMxQ2w0WEVTTGdxdWVua2pRM0NoVldsc2xLUmZYODNXTUxsd2RHajlvVTlZeTNuZng0dXlUVjNMU0RuSlZzOWVwRHBqVUZsbldiRzNPSFl0WTVyZXpyNA","message":{"webhook_id":"1291499059097374721","type":20,"tts":false,"timestamp":"2026-09-11T00:34:34.763000+00:00","pinned":false,"mentions":[],"mention_roles":[],"mention_everyone":false,"interaction_metadata":{"user":{"vad_colors":null,"username":"capitanlaw","public_flags":0,"primary_guild":null,"id":"310615264288964610","global_name":"Capitão Law","display_name_styles":null,"discriminator":"0","collectibles":{"nameplate":{"sku_id":"1465519580016410746","palette":"bubble_gum","label":"Swaying cherry blossom branch with petals blowing and gentle watercolor washes.","expires_at":null,"asset":"nameplates/blossoming_branch/1465519580016410746/"}},"clan":null,"avatar_decoration_data":{"sku_id":"1466990610429772003","expires_at":null,"asset":"a_205011b1e9e1b3538f8cc7c6ccba61b3"},"avatar":"bf33b3980bb5898a0857766c348aefe2"},"type":2,"name":"bambam settings","id":"1547767268283392041","command_type":1,"authorizing_integration_owners":{"0":"1098316516774129684"}},"interaction":{"user":{"vad_colors":null,"username":"capitanlaw","public_flags":0,"primary_guild":null,"id":"310615264288964610","global_name":"Capitão Law","display_name_styles":null,"discriminator":"0","collectibles":{"nameplate":{"sku_id":"1465519580016410746","palette":"bubble_gum","label":"Swaying cherry blossom branch with petals blowing and gentle watercolor washes.","expires_at":null,"asset":"nameplates/blossoming_branch/1465519580016410746/"}},"clan":null,"avatar_decoration_data":{"sku_id":"1466990610429772003","expires_at":null,"asset":"a_205011b1e9e1b3538f8cc7c6ccba61b3"},"avatar":"bf33b3980bb5898a0857766c348aefe2"},"type":2,"name":"bambam settings","id":"1547767268283392041"},"id":"1547767276164489218","flags":64,"embeds":[{"type":"rich","title":"⚙️ Painel de Configurações do Servidor","id":"1547767276164489217","fields":[{"value":"• **Boas-Vindas:** Não configurado\n• **Saída:** Não configurado","name":"⚙️ Configurações Gerais","inline":false},{"value":"• **Canal de Cargos:** Não configurado\n• **Autoroles:** 0 cargo(s)\n• **Cargos Autoatribuíveis:** 0 cargo(s)","name":"🎭 Cargos & Painel","inline":false},{"value":"• **Categorias Monitoradas:** 0 categoria(s) configurada(s)","name":"🔊 Salas de Voz Temporárias","inline":false}],"description":"Visualize o status das configurações do servidor e clique nos botões abaixo para editar cada seção.","content_scan_version":0,"color":5793266}],"edited_timestamp":null,"content":"","components":[{"type":1,"id":1,"components":[{"type":2,"style":2,"label":"⚙️ Geral","id":2,"custom_id":"settings_btn:general"},{"type":2,"style":2,"label":"🎭 Cargos","id":3,"custom_id":"settings_btn:roles"},{"type":2,"style":2,"label":"🔊 Salas de Voz","id":4,"custom_id":"settings_btn:voice"}]}],"channel_id":"1281291889538105477","author":{"vad_colors":null,"username":"Bambam","public_flags":0,"primary_guild":null,"id":"1291499059097374721","global_name":null,"display_name_styles":null,"discriminator":"1552","collectibles":null,"clan":null,"bot":true,"avatar_decoration_data":null,"avatar":"8ad4f44789f3f5b2c4127ca2266f9fc2"},"attachments":[],"application_id":"1291499059097374721"},"member":{"user":{"vad_colors":null,"username":"capitanlaw","public_flags":0,"primary_guild":null,"id":"310615264288964610","global_name":"Capitão Law","display_name_styles":null,"discriminator":"0","collectibles":{"nameplate":{"sku_id":"1465519580016410746","palette":"bubble_gum","label":"Swaying cherry blossom branch with petals blowing and gentle watercolor washes.","expires_at":null,"asset":"nameplates/blossoming_branch/1465519580016410746/"}},"clan":null,"avatar_decoration_data":{"sku_id":"1466990610429772003","expires_at":null,"asset":"a_205011b1e9e1b3538f8cc7c6ccba61b3"},"avatar":"bf33b3980bb5898a0857766c348aefe2"},"unusual_dm_activity_until":null,"roles":["1289376155790479471","1108091773613518898","1281421033433468948","1395031398385188984","1289305940901888093"],"premium_since":null,"permissions":"18014398509481983","pending":false,"nick":null,"mute":false,"joined_at":"2024-09-16T10:13:04.810000+00:00","flags":106,"deaf":false,"communication_disabled_until":null,"banner":null,"avatar":null},"locale":"pt-BR","id":"1547773208676016278","guild_locale":"pt-BR","guild_id":"1098316516774129684","guild":{"locale":"pt-BR","id":"1098316516774129684","features":["VIDEO_QUALITY_720_60FPS","GUESTS_ENABLED","ACTIVITY_FEED_DISABLED_BY_USER","MEMBER_VERIFICATION_MANUAL_APPROVAL","COMMUNITY","GUILD_SERVER_GUIDE","GUILD_WEB_PAGE_VANITY_URL","WELCOME_SCREEN_ENABLED","SOUNDBOARD","ENABLED_DISCOVERABLE_BEFORE","CHANNEL_ICON_EMOJIS_GENERATED","NEWS","INVITE_SPLASH","MEMBER_VERIFICATION_GATE_ENABLED","GUILD_ONBOARDING_HAS_PROMPTS","GUILD_ONBOARDING","AUDIO_BITRATE_128_KBPS","GUILD_ONBOARDING_EVER_ENABLED","ANIMATED_ICON","STAGE_CHANNEL_VIEWERS_50","VIDEO_BITRATE_ENHANCED","AUTO_MODERATION","TIERLESS_BOOSTING","AGE_VERIFICATION_LARGE_GUILD","PRUNE_REQUIRES_ADMIN"]},"entitlements":[],"entitlement_sku_ids":[],"data":{"id":2,"custom_id":"settings_btn:general","component_type":2},"context":0,"channel_id":"1281291889538105477","channel":{"type":0,"topic":null,"rate_limit_per_user":0,"position":5,"permissions":"18014398509481983","parent_id":"1291226772259471422","nsfw":false,"name":"⌈🔐⌋╸security","last_message_id":"1547378469036630017","id":"1281291889538105477","guild_id":"1098316516774129684","flags":0},"authorizing_integration_owners":{"0":"1098316516774129684"},"attachment_size_limit":20971520,"application_id":"1291499059097374721","app_permissions":"8886045607586513"}
+    ;
+    var parsed_json = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, raw, .{});
+    defer parsed_json.deinit();
+
+    var parsed_inter = try std.json.parseFromValue(schema.Interaction, std.testing.allocator, parsed_json.value, .{ .ignore_unknown_fields = true });
+    defer parsed_inter.deinit();
+
+    try std.testing.expectEqualStrings("1547773208676016278", parsed_inter.value.id);
+    try std.testing.expectEqual(@as(u8, 3), parsed_inter.value.type);
+    const data = parsed_inter.value.data.?;
+    try std.testing.expectEqualStrings("settings_btn:general", data.custom_id.?);
+    try std.testing.expectEqual(@as(u8, 2), data.component_type.?);
+}
+

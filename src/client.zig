@@ -3130,7 +3130,9 @@ pub const Client = struct {
             if (want_collectors or slot.on != null or slot.once != null) {
                 // Parse único: alimenta collectors e o handler com o mesmo valor.
                 var parsed_inter = std.json.parseFromValue(schema.Interaction, self.allocator, value, .{ .ignore_unknown_fields = true }) catch |err| {
-                    std.log.warn("discord: failed to parse payload for event interaction_create: {any}", .{err});
+                    const raw_json = std.json.Stringify.valueAlloc(self.allocator, value, .{}) catch "<?>";
+                    defer if (!std.mem.eql(u8, raw_json, "<?>")) self.allocator.free(raw_json);
+                    std.log.warn("discord: failed to parse payload for event interaction_create: {any}\nPayload: {s}", .{ err, raw_json });
                     return;
                 };
                 defer parsed_inter.deinit();

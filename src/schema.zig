@@ -1,5 +1,72 @@
 const std = @import("std");
 
+fn asOwnedString(allocator: std.mem.Allocator, v: std.json.Value) ![]const u8 {
+    return switch (v) {
+        .string => |s| try allocator.dupe(u8, s),
+        .integer => |n| try std.fmt.allocPrint(allocator, "{d}", .{n}),
+        else => error.UnexpectedToken,
+    };
+}
+
+fn asOwnedOptString(allocator: std.mem.Allocator, v: std.json.Value) !?[]const u8 {
+    return switch (v) {
+        .null => null,
+        .string => |s| try allocator.dupe(u8, s),
+        .integer => |n| try std.fmt.allocPrint(allocator, "{d}", .{n}),
+        else => error.UnexpectedToken,
+    };
+}
+
+fn asOwnedStringOrEmpty(allocator: std.mem.Allocator, v: std.json.Value) ![]const u8 {
+    return switch (v) {
+        .null => "",
+        .string => |s| try allocator.dupe(u8, s),
+        .integer => |n| try std.fmt.allocPrint(allocator, "{d}", .{n}),
+        else => error.UnexpectedToken,
+    };
+}
+
+fn asOwnedStringOrZero(allocator: std.mem.Allocator, v: std.json.Value) ![]const u8 {
+    return switch (v) {
+        .null => "0",
+        .string => |s| try allocator.dupe(u8, s),
+        .integer => |n| try std.fmt.allocPrint(allocator, "{d}", .{n}),
+        else => error.UnexpectedToken,
+    };
+}
+
+fn asOptInt(comptime T: type, v: std.json.Value) !?T {
+    return switch (v) {
+        .null => null,
+        .integer => |n| blk: {
+            if (n < 0 or n > std.math.maxInt(T)) return error.Overflow;
+            break :blk @as(T, @intCast(n));
+        },
+        .string => |s| std.fmt.parseInt(T, s, 10) catch error.UnexpectedToken,
+        else => error.UnexpectedToken,
+    };
+}
+
+fn asIntOrDefault(comptime T: type, v: std.json.Value, default_val: T) !T {
+    return switch (v) {
+        .null => default_val,
+        .integer => |n| blk: {
+            if (n < 0 or n > std.math.maxInt(T)) return error.Overflow;
+            break :blk @as(T, @intCast(n));
+        },
+        .string => |s| std.fmt.parseInt(T, s, 10) catch default_val,
+        else => error.UnexpectedToken,
+    };
+}
+
+fn asBoolOrDefault(v: std.json.Value, default_val: bool) !bool {
+    return switch (v) {
+        .null => default_val,
+        .bool => |b| b,
+        else => error.UnexpectedToken,
+    };
+}
+
 pub const User = struct {
     id: []const u8 = "",
     username: []const u8 = "",
@@ -12,6 +79,28 @@ pub const User = struct {
     pub fn tag(self: User, allocator: std.mem.Allocator) ![]u8 {
         return std.fmt.allocPrint(allocator, "{s}#{s}", .{ self.username, self.discriminator });
     }
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !User {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !User {
+        _ = options;
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = User{};
+        if (obj.get("id")) |v| out.id = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("username")) |v| out.username = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("discriminator")) |v| out.discriminator = try asOwnedStringOrZero(allocator, v);
+        if (obj.get("global_name")) |v| out.global_name = try asOwnedOptString(allocator, v);
+        if (obj.get("avatar")) |v| out.avatar = try asOwnedOptString(allocator, v);
+        if (obj.get("bot")) |v| out.bot = try asBoolOrDefault(v, false);
+        if (obj.get("system")) |v| out.system = try asBoolOrDefault(v, false);
+        return out;
+    }
 };
 
 pub const GuildMember = struct {
@@ -20,6 +109,43 @@ pub const GuildMember = struct {
     roles: []const []const u8 = &.{},
     joined_at: []const u8 = "",
     guild_id: []const u8 = "",
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !GuildMember {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !GuildMember {
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = GuildMember{};
+        if (obj.get("user")) |v| {
+            out.user = switch (v) {
+                .null => null,
+                .object => try User.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("nick")) |v| out.nick = try asOwnedOptString(allocator, v);
+        if (obj.get("roles")) |v| {
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const roles_arr = try allocator.alloc([]const u8, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        roles_arr[i] = try asOwnedStringOrEmpty(allocator, item);
+                    }
+                    out.roles = roles_arr;
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+        if (obj.get("joined_at")) |v| out.joined_at = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("guild_id")) |v| out.guild_id = try asOwnedStringOrEmpty(allocator, v);
+        return out;
+    }
 };
 
 pub const Guild = struct {
@@ -111,29 +237,31 @@ pub const Channel = struct {
         if (obj.get("name")) |v| out.name = try asOwnedOptString(allocator, v);
         if (obj.get("topic")) |v| out.topic = try asOwnedOptString(allocator, v);
         if (obj.get("permission_overwrites")) |v| {
-            const items = switch (v) {
-                .array => |a| a.items,
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const overwrites = try allocator.alloc(PermissionOverwrite, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        const o = switch (item) {
+                            .object => |o| o,
+                            else => return error.UnexpectedToken,
+                        };
+                        const type_num = switch (o.get("type") orelse return error.UnexpectedToken) {
+                            .integer => |n| n,
+                            else => return error.UnexpectedToken,
+                        };
+                        if (type_num < 0 or type_num > std.math.maxInt(u8)) return error.Overflow;
+                        overwrites[i] = .{
+                            .id = try asOwnedString(allocator, o.get("id") orelse return error.UnexpectedToken),
+                            .@"type" = @as(u8, @intCast(type_num)),
+                            .allow = try asOwnedString(allocator, o.get("allow") orelse .{ .string = "0" }),
+                            .deny = try asOwnedString(allocator, o.get("deny") orelse .{ .string = "0" }),
+                        };
+                    }
+                    out.permission_overwrites = overwrites;
+                },
                 else => return error.UnexpectedToken,
-            };
-            const overwrites = try allocator.alloc(PermissionOverwrite, items.len);
-            for (items, 0..) |item, i| {
-                const o = switch (item) {
-                    .object => |o| o,
-                    else => return error.UnexpectedToken,
-                };
-                const type_num = switch (o.get("type") orelse return error.UnexpectedToken) {
-                    .integer => |n| n,
-                    else => return error.UnexpectedToken,
-                };
-                if (type_num < 0 or type_num > std.math.maxInt(u8)) return error.Overflow;
-                overwrites[i] = .{
-                    .id = try asOwnedString(allocator, o.get("id") orelse return error.UnexpectedToken),
-                    .@"type" = @as(u8, @intCast(type_num)),
-                    .allow = try asOwnedString(allocator, o.get("allow") orelse .{ .string = "0" }),
-                    .deny = try asOwnedString(allocator, o.get("deny") orelse .{ .string = "0" }),
-                };
             }
-            out.permission_overwrites = overwrites;
         }
         return out;
     }
@@ -144,25 +272,28 @@ pub const Channel = struct {
     }
 };
 
-fn asOwnedString(allocator: std.mem.Allocator, v: std.json.Value) ![]const u8 {
-    return switch (v) {
-        .string => |s| try allocator.dupe(u8, s),
-        else => error.UnexpectedToken,
-    };
-}
-
-fn asOwnedOptString(allocator: std.mem.Allocator, v: std.json.Value) !?[]const u8 {
-    return switch (v) {
-        .null => null,
-        .string => |s| try allocator.dupe(u8, s),
-        else => error.UnexpectedToken,
-    };
-}
-
 pub const Attachment = struct {
     id: []const u8 = "",
     filename: []const u8 = "",
     url: []const u8 = "",
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Attachment {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !Attachment {
+        _ = options;
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = Attachment{};
+        if (obj.get("id")) |v| out.id = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("filename")) |v| out.filename = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("url")) |v| out.url = try asOwnedStringOrEmpty(allocator, v);
+        return out;
+    }
 };
 
 pub const Embed = struct {
@@ -176,6 +307,66 @@ pub const Embed = struct {
     thumbnail: ?EmbedImage = null,
     fields: []const EmbedField = &.{},
     timestamp: ?[]const u8 = null,
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Embed {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !Embed {
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = Embed{};
+        if (obj.get("title")) |v| out.title = try asOwnedOptString(allocator, v);
+        if (obj.get("description")) |v| out.description = try asOwnedOptString(allocator, v);
+        if (obj.get("url")) |v| out.url = try asOwnedOptString(allocator, v);
+        if (obj.get("color")) |v| out.color = try asOptInt(u32, v);
+        if (obj.get("timestamp")) |v| out.timestamp = try asOwnedOptString(allocator, v);
+        if (obj.get("author")) |v| {
+            out.author = switch (v) {
+                .null => null,
+                .object => try EmbedAuthor.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("footer")) |v| {
+            out.footer = switch (v) {
+                .null => null,
+                .object => try EmbedFooter.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("image")) |v| {
+            out.image = switch (v) {
+                .null => null,
+                .object => try EmbedImage.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("thumbnail")) |v| {
+            out.thumbnail = switch (v) {
+                .null => null,
+                .object => try EmbedImage.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("fields")) |v| {
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const fields_arr = try allocator.alloc(EmbedField, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        fields_arr[i] = try EmbedField.jsonParseFromValue(allocator, item, options);
+                    }
+                    out.fields = fields_arr;
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+        return out;
+    }
 
     pub fn jsonStringify(self: Embed, jw: anytype) !void {
         try jw.beginObject();
@@ -228,6 +419,24 @@ pub const EmbedAuthor = struct {
     url: ?[]const u8 = null,
     icon_url: ?[]const u8 = null,
 
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !EmbedAuthor {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !EmbedAuthor {
+        _ = options;
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = EmbedAuthor{};
+        if (obj.get("name")) |v| out.name = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("url")) |v| out.url = try asOwnedOptString(allocator, v);
+        if (obj.get("icon_url")) |v| out.icon_url = try asOwnedOptString(allocator, v);
+        return out;
+    }
+
     pub fn jsonStringify(self: EmbedAuthor, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("name");
@@ -248,6 +457,23 @@ pub const EmbedFooter = struct {
     text: []const u8 = "",
     icon_url: ?[]const u8 = null,
 
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !EmbedFooter {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !EmbedFooter {
+        _ = options;
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = EmbedFooter{};
+        if (obj.get("text")) |v| out.text = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("icon_url")) |v| out.icon_url = try asOwnedOptString(allocator, v);
+        return out;
+    }
+
     pub fn jsonStringify(self: EmbedFooter, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("text");
@@ -263,6 +489,22 @@ pub const EmbedFooter = struct {
 pub const EmbedImage = struct {
     url: []const u8 = "",
 
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !EmbedImage {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !EmbedImage {
+        _ = options;
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = EmbedImage{};
+        if (obj.get("url")) |v| out.url = try asOwnedStringOrEmpty(allocator, v);
+        return out;
+    }
+
     pub fn jsonStringify(self: EmbedImage, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("url");
@@ -275,6 +517,24 @@ pub const EmbedField = struct {
     name: []const u8 = "",
     value: []const u8 = "",
     @"inline": bool = false,
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !EmbedField {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !EmbedField {
+        _ = options;
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = EmbedField{};
+        if (obj.get("name")) |v| out.name = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("value")) |v| out.value = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("inline")) |v| out.@"inline" = try asBoolOrDefault(v, false);
+        return out;
+    }
 
     pub fn jsonStringify(self: EmbedField, jw: anytype) !void {
         try jw.beginObject();
@@ -303,6 +563,68 @@ pub const Message = struct {
     attachments: []const Attachment = &.{},
     flags: u32 = 0,
     poll: ?Poll = null,
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Message {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !Message {
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = Message{};
+        if (obj.get("id")) |v| out.id = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("channel_id")) |v| out.channel_id = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("guild_id")) |v| out.guild_id = try asOwnedOptString(allocator, v);
+        if (obj.get("author")) |v| {
+            out.author = switch (v) {
+                .null => .{},
+                .object => try User.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("content")) |v| out.content = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("timestamp")) |v| out.timestamp = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("tts")) |v| out.tts = try asBoolOrDefault(v, false);
+        if (obj.get("mention_everyone")) |v| out.mention_everyone = try asBoolOrDefault(v, false);
+        if (obj.get("embeds")) |v| {
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const embeds_arr = try allocator.alloc(Embed, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        embeds_arr[i] = try Embed.jsonParseFromValue(allocator, item, options);
+                    }
+                    out.embeds = embeds_arr;
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+        if (obj.get("attachments")) |v| {
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const atts_arr = try allocator.alloc(Attachment, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        atts_arr[i] = try Attachment.jsonParseFromValue(allocator, item, options);
+                    }
+                    out.attachments = atts_arr;
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+        if (obj.get("flags")) |v| out.flags = try asIntOrDefault(u32, v, 0);
+        if (obj.get("poll")) |v| {
+            out.poll = switch (v) {
+                .null => null,
+                .object => try std.json.parseFromValueLeaky(Poll, allocator, v, .{ .ignore_unknown_fields = true }),
+                else => return error.UnexpectedToken,
+            };
+        }
+        return out;
+    }
 };
 
 pub const GatewayBot = struct {
@@ -342,6 +664,58 @@ pub const Interaction = struct {
     user: ?User = null,
     member: ?GuildMember = null,
 
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Interaction {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !Interaction {
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = Interaction{
+            .id = "",
+            .application_id = "",
+        };
+        if (obj.get("id")) |v| out.id = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("application_id")) |v| out.application_id = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("type")) |v| out.type = try asIntOrDefault(u8, v, 0);
+        if (obj.get("token")) |v| out.token = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("version")) |v| out.version = try asIntOrDefault(u8, v, 1);
+        if (obj.get("channel_id")) |v| out.channel_id = try asOwnedOptString(allocator, v);
+        if (obj.get("guild_id")) |v| out.guild_id = try asOwnedOptString(allocator, v);
+        if (obj.get("data")) |v| {
+            out.data = switch (v) {
+                .null => null,
+                .object => try InteractionData.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("message")) |v| {
+            out.message = switch (v) {
+                .null => null,
+                .object => try Message.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("user")) |v| {
+            out.user = switch (v) {
+                .null => null,
+                .object => try User.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        if (obj.get("member")) |v| {
+            out.member = switch (v) {
+                .null => null,
+                .object => try GuildMember.jsonParseFromValue(allocator, v, options),
+                else => return error.UnexpectedToken,
+            };
+        }
+        return out;
+    }
+
     pub fn kind(self: Interaction) InteractionType {
         return @enumFromInt(self.type);
     }
@@ -379,6 +753,70 @@ pub const InteractionData = struct {
     resolved: ?std.json.Value = null,
     options: []const InteractionOption = &.{},
     components: []const ModalRow = &.{},
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !InteractionData {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !InteractionData {
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = InteractionData{};
+        if (obj.get("id")) |v| out.id = try asOwnedOptString(allocator, v);
+        if (obj.get("name")) |v| out.name = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("type")) |v| out.type = try asIntOrDefault(u8, v, 0);
+        if (obj.get("custom_id")) |v| out.custom_id = try asOwnedOptString(allocator, v);
+        if (obj.get("component_type")) |v| out.component_type = try asOptInt(u8, v);
+        if (obj.get("values")) |v| {
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const out_values = try allocator.alloc([]const u8, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        out_values[i] = try asOwnedStringOrEmpty(allocator, item);
+                    }
+                    out.values = out_values;
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+        if (obj.get("resolved")) |v| {
+            out.resolved = switch (v) {
+                .null => null,
+                else => v,
+            };
+        }
+        if (obj.get("options")) |v| {
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const opts = try allocator.alloc(InteractionOption, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        opts[i] = try InteractionOption.jsonParseFromValue(allocator, item, options);
+                    }
+                    out.options = opts;
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+        if (obj.get("components")) |v| {
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const rows = try allocator.alloc(ModalRow, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        rows[i] = try ModalRow.jsonParseFromValue(allocator, item, options);
+                    }
+                    out.components = rows;
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+        return out;
+    }
 
     pub fn get(self: InteractionData, name: []const u8) ?InteractionOption {
         for (self.options) |o| {
@@ -451,22 +889,31 @@ pub const ModalRow = struct {
                     if (n < 0 or n > std.math.maxInt(u8)) return error.Overflow;
                     break :blk @as(u8, @intCast(n));
                 },
+                .null => 1,
                 else => return error.UnexpectedToken,
             };
         }
         if (obj.get("components")) |v| {
-            const items = switch (v) {
-                .array => |a| a.items,
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const inputs = try allocator.alloc(ModalInput, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        inputs[i] = try innerModalInput(allocator, item);
+                    }
+                    out.components = inputs;
+                },
                 else => return error.UnexpectedToken,
-            };
-            const inputs = try allocator.alloc(ModalInput, items.len);
-            for (items, 0..) |item, i| {
-                inputs[i] = try innerModalInput(allocator, item);
             }
-            out.components = inputs;
         }
         if (obj.get("component")) |v| {
-            out.label_child = try innerModalInput(allocator, v);
+            switch (v) {
+                .null => {},
+                .object => {
+                    out.label_child = try innerModalInput(allocator, v);
+                },
+                else => return error.UnexpectedToken,
+            }
         }
         return out;
     }
@@ -484,34 +931,28 @@ fn innerModalInput(allocator: std.mem.Allocator, source: std.json.Value) !ModalI
                 if (n < 0 or n > std.math.maxInt(u8)) return error.Overflow;
                 break :blk @as(u8, @intCast(n));
             },
+            .null => 4,
             else => return error.UnexpectedToken,
         };
     }
     if (obj.get("custom_id")) |v| {
-        out.custom_id = switch (v) {
-            .string => |s| try allocator.dupe(u8, s),
-            else => return error.UnexpectedToken,
-        };
+        out.custom_id = try asOwnedStringOrEmpty(allocator, v);
     }
     if (obj.get("value")) |v| {
-        out.value = switch (v) {
-            .string => |s| try allocator.dupe(u8, s),
-            else => return error.UnexpectedToken,
-        };
+        out.value = try asOwnedStringOrEmpty(allocator, v);
     }
     if (obj.get("values")) |v| {
-        const items = switch (v) {
-            .array => |a| a.items,
+        switch (v) {
+            .null => {},
+            .array => |a| {
+                const out_values = try allocator.alloc([]const u8, a.items.len);
+                for (a.items, 0..) |item, i| {
+                    out_values[i] = try asOwnedStringOrEmpty(allocator, item);
+                }
+                out.values = out_values;
+            },
             else => return error.UnexpectedToken,
-        };
-        const out_values = try allocator.alloc([]const u8, items.len);
-        for (items, 0..) |item, i| {
-            out_values[i] = switch (item) {
-                .string => |s| try allocator.dupe(u8, s),
-                else => return error.UnexpectedToken,
-            };
         }
-        out.values = out_values;
     }
     return out;
 }
@@ -904,6 +1345,42 @@ pub const InteractionOption = struct {
     value: ?std.json.Value = null,
     focused: bool = false,
     options: []const InteractionOption = &.{},
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !InteractionOption {
+        const v = try std.json.Value.jsonParse(allocator, source, options);
+        return jsonParseFromValue(allocator, v, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !InteractionOption {
+        const obj = switch (source) {
+            .object => |o| o,
+            else => return error.UnexpectedToken,
+        };
+        var out = InteractionOption{};
+        if (obj.get("name")) |v| out.name = try asOwnedStringOrEmpty(allocator, v);
+        if (obj.get("type")) |v| out.type = try asIntOrDefault(u8, v, 0);
+        if (obj.get("value")) |v| {
+            out.value = switch (v) {
+                .null => null,
+                else => v,
+            };
+        }
+        if (obj.get("focused")) |v| out.focused = try asBoolOrDefault(v, false);
+        if (obj.get("options")) |v| {
+            switch (v) {
+                .null => {},
+                .array => |a| {
+                    const sub_opts = try allocator.alloc(InteractionOption, a.items.len);
+                    for (a.items, 0..) |item, i| {
+                        sub_opts[i] = try jsonParseFromValue(allocator, item, options);
+                    }
+                    out.options = sub_opts;
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+        return out;
+    }
 
     pub fn asString(self: InteractionOption) ?[]const u8 {
         const v = self.value orelse return null;
