@@ -484,14 +484,14 @@ pub fn autocompleteBody(allocator: std.mem.Allocator, choices: []const schema.Co
     return std.json.Stringify.valueAlloc(allocator, .{
         .type = 8,
         .data = .{ .choices = choices },
-    }, .{});
+    }, .{ .emit_null_optional_fields = false });
 }
 
 pub fn modalBody(allocator: std.mem.Allocator, modal: schema.Modal) ![]u8 {
     return std.json.Stringify.valueAlloc(allocator, .{
         .type = 9,
         .data = modal,
-    }, .{});
+    }, .{ .emit_null_optional_fields = false });
 }
 
 fn followUpBody(allocator: std.mem.Allocator, content: ?[]const u8, bits: u32, embeds: []const schema.Embed, components: []const schema.Component, poll: ?schema.PollCreate, files: []const attachment_mod.Attachment) ![]u8 {

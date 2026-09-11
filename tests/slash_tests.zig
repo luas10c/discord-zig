@@ -648,6 +648,33 @@ test "reply without content sends v2 components only" {
     try std.testing.expectEqualStrings("{\"type\":4,\"data\":{\"flags\":32768,\"components\":[{\"type\":1,\"components\":[]}]}}", setup.ctx.reqs[0].bodyStr());
 }
 
+test "reply with embeds and components" {
+    const allocator = std.testing.allocator;
+    const setup = try withInteractionMock(1);
+    defer destroyInteractionMock(setup);
+
+    var rest = client.Rest.init(allocator, std.testing.io, "tok");
+    defer rest.deinit();
+    rest.base_url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{setup.port});
+    defer allocator.free(rest.base_url);
+
+    var handle = slash.Interaction.init(&rest, .{
+        .id = "INT",
+        .application_id = "APP",
+        .token = "TKN",
+    });
+    const embed = schema.Embed{
+        .title = "Hello",
+        .description = "World",
+    };
+    try handle.reply(.{ .embeds = &.{embed} });
+
+    try std.testing.expect(setup.ctx.err == null);
+    try std.testing.expectEqual(@as(usize, 1), setup.ctx.count);
+    try std.testing.expectEqualStrings("{\"type\":4,\"data\":{\"embeds\":[{\"title\":\"Hello\",\"description\":\"World\"}]}}", setup.ctx.reqs[0].bodyStr());
+}
+
+
 test "followUp with poll and reply with files" {
     const allocator = std.testing.allocator;
     const setup = try withInteractionMock(2);
