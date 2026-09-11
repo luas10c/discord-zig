@@ -227,7 +227,7 @@ test "label modal builds and submits" {
     const built = try modal.build();
     const body = try slash.modalBody(std.testing.allocator, built);
     defer std.testing.allocator.free(body);
-    try std.testing.expectEqualStrings("{\"type\":9,\"data\":{\"title\":\"Hi\",\"custom_id\":\"modal-x\",\"components\":[{\"type\":18,\"label\":\"Your name\",\"description\":\"First and last\",\"component\":{\"type\":4,\"custom_id\":\"field-a\",\"style\":1,\"label\":\"Name\",\"required\":true}}]}}", body);
+    try std.testing.expectEqualStrings("{\"type\":9,\"data\":{\"title\":\"Hi\",\"custom_id\":\"modal-x\",\"components\":[{\"type\":18,\"label\":\"Your name\",\"description\":\"First and last\",\"component\":{\"type\":4,\"custom_id\":\"field-a\",\"style\":1,\"required\":true}}]}}", body);
 
     const submit =
         \\{"id":"12","application_id":"2","type":5,"token":"t","data":{"custom_id":"modal-x","components":[{"type":18,"id":1,"component":{"type":4,"id":2,"custom_id":"field-a","value":"hello"}}]}}

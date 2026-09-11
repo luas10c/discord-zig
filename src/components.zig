@@ -152,6 +152,7 @@ pub const ActionRowBuilder = struct {
                 .button, .string_select, .user_select, .role_select, .mentionable_select, .channel_select, .text_input => {},
                 else => return error.MixedRowChildren,
             }
+            if (t == .text_input and k.label == null) return error.MissingLabel;
             switch (t) {
                 .button => {},
                 .text_input => inputs += 1,
@@ -508,8 +509,9 @@ pub const TextInputBuilder = struct {
     pub fn build(self: *TextInputBuilder) BuildError!schema.Component {
         const custom_id = self.custom_id orelse return error.MissingCustomId;
         if (custom_id.len == 0 or custom_id.len > max_custom_id_len) return error.CustomIdTooLong;
-        const label = self.label orelse return error.MissingLabel;
-        if (label.len == 0 or label.len > max_text_label_len) return error.LabelTooLong;
+        if (self.label) |l| {
+            if (l.len == 0 or l.len > max_text_label_len) return error.LabelTooLong;
+        }
         if (self.placeholder) |p| {
             if (p.len > max_text_placeholder_len) return error.PlaceholderTooLong;
         }
@@ -517,7 +519,7 @@ pub const TextInputBuilder = struct {
             .type = @intFromEnum(schema.ComponentType.text_input),
             .custom_id = custom_id,
             .style = @intFromEnum(self.style),
-            .label = label,
+            .label = self.label,
             .min_length = self.min_length,
             .max_length = self.max_length,
             .required = self.required,
@@ -868,6 +870,9 @@ pub const LabelBuilder = struct {
         }
         const owned = try self.arena.allocator().create(schema.Component);
         owned.* = child;
+        if (kind == .text_input) {
+            owned.label = null;
+        }
         return .{
             .type = @intFromEnum(schema.ComponentType.label),
             .label = label,
