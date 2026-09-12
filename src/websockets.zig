@@ -199,7 +199,17 @@ pub const Socket = struct {
             }
             var w: Io.Writer = .fixed(buf);
             while (true) {
-                const n = try ctx.client.reader.stream(&w, .limited(buf.len));
+                const n = ctx.client.reader.stream(&w, .limited(buf.len)) catch |err| switch (err) {
+                    // `stream` colapsa falhas TLS (ex.: EOF sem close_notify
+                    // -> `TlsConnectionTruncated` interno, alerta, MAC ruim)
+                    // em `ReadFailed`; EOF limpo vem como `EndOfStream`.
+                    // Ambos são queda de transporte (LB/NAT fechando idle,
+                    // flap de rede): normaliza para `ConnectionClosed` para
+                    // o `serveForever` reconectar/resumir em vez de crashar
+                    // com `error: EndOfStream` depois de horas online.
+                    error.EndOfStream, error.ReadFailed => return error.ConnectionClosed,
+                    else => return err,
+                };
                 if (n != 0) return n;
             }
         }

@@ -2957,6 +2957,23 @@ pub const Client = struct {
                     try self.io.sleep(.{ .nanoseconds = @as(i96, delay) * std.time.ns_per_ms }, .awake);
                     continue;
                 },
+                // Quedas de transporte no meio da sessão (FIN silencioso,
+                // NAT/LB fechando idle, flap de rede, peer resetando):
+                // reconecta com backoff em vez de crashar o processo.
+                // `readRaw` já normaliza EOF/falha TLS para
+                // `ConnectionClosed`, mas `sendText`/handshake/DNS ainda
+                // podem vazar estes erros diretamente.
+                error.EndOfStream,
+                error.ReadFailed,
+                error.WriteFailed,
+                error.ConnectionResetByPeer,
+                => {
+                    std.log.warn("discord: gateway transport drop ({any}), reconnecting", .{err});
+                    const delay = util.backoffMs(attempt);
+                    attempt = @min(attempt + 1, 16);
+                    try self.io.sleep(.{ .nanoseconds = @as(i96, delay) * std.time.ns_per_ms }, .awake);
+                    continue;
+                },
                 else => return err,
             };
         }
