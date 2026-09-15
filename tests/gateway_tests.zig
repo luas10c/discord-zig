@@ -30,7 +30,10 @@ test "parse hello" {
 }
 
 test "close code resume" {
-    try std.testing.expect(!gateway.canResume(1000));
+    try std.testing.expect(!gateway.canResume(4004));
+    try std.testing.expect(!gateway.canResume(4014));
+    try std.testing.expect(gateway.canResume(1000));
+    try std.testing.expect(gateway.canResume(1001));
     try std.testing.expect(gateway.canResume(4000));
 }
 

@@ -237,7 +237,7 @@ pub fn parseHello(allocator: std.mem.Allocator, text: []const u8) !u64 {
 
 pub fn canResume(close_code: u16) bool {
     return switch (close_code) {
-        1000, 1001, 4010, 4011, 4012, 4013, 4014 => false,
+        4004, 4010, 4011, 4012, 4013, 4014 => false,
         else => true,
     };
 }

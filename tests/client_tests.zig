@@ -640,6 +640,33 @@ test "fatal close returns GatewayClosed" {
     try checkReconnectMock(setup);
 }
 
+test "going away close (1001) is resumable" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const conn = [_]ReStep{
+        .{ .send_text = "{\"op\":10,\"d\":{\"heartbeat_interval\":41250}}" },
+        .{ .expect_op = 2 },
+        .{ .send_close = 1001 },
+    };
+    const scripts = [_][]const ReStep{&conn};
+    const setup = try withReconnectMock(&scripts);
+    defer destroyReconnectMock(setup);
+
+    var c = Client.init(allocator, io, .{});
+    defer c.deinit();
+    c.session.config.token = "x";
+
+    var sock = try websockets.connectOptions(io, allocator, .{
+        .host = "127.0.0.1",
+        .port = setup.port,
+        .path = "/?v=10&encoding=json",
+        .tls = false,
+    });
+    defer sock.deinit();
+    try std.testing.expectError(error.GatewayReconnect, c.serve(&sock));
+    try checkReconnectMock(setup);
+}
+
 test "serveForever reconnects and resumes" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
