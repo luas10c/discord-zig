@@ -94,8 +94,7 @@ pub fn cacheWithLimits(options: anytype) Limits {
     if (@hasField(T, "RoleManager")) limits.roles = getLimitValue(T, options, "RoleManager");
     if (@hasField(T, "ThreadManager")) limits.threads = getLimitValue(T, options, "ThreadManager");
     if (@hasField(T, "ThreadMemberManager")) limits.thread_members = getLimitValue(T, options, "ThreadMemberManager");
-    if (@hasField(T, "GuildEmojiManager")) limits.emojis = getLimitValue(T, options, "GuildEmojiManager")
-    else if (@hasField(T, "BaseGuildEmojiManager")) limits.emojis = getLimitValue(T, options, "BaseGuildEmojiManager");
+    if (@hasField(T, "GuildEmojiManager")) limits.emojis = getLimitValue(T, options, "GuildEmojiManager") else if (@hasField(T, "BaseGuildEmojiManager")) limits.emojis = getLimitValue(T, options, "BaseGuildEmojiManager");
     if (@hasField(T, "GuildStickerManager")) limits.stickers = getLimitValue(T, options, "GuildStickerManager");
     if (@hasField(T, "GuildBanManager")) limits.bans = getLimitValue(T, options, "GuildBanManager");
     if (@hasField(T, "GuildInviteManager")) limits.invites = getLimitValue(T, options, "GuildInviteManager");
@@ -136,40 +135,40 @@ pub fn Store(comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
+        pub const Entry = struct {
+            parsed: std.json.Parsed(V),
+            prev: ?K = null,
+            next: ?K = null,
+        };
+
         allocator: std.mem.Allocator,
         limit: ?usize,
-        entries: std.AutoHashMapUnmanaged(K, std.json.Parsed(V)) = .empty,
-        order: std.ArrayListUnmanaged(K) = .empty,
+        entries: std.AutoHashMapUnmanaged(K, Entry) = .empty,
+        // Lista duplamente ligada por chaves, intrusiva nos `Entry`:
+        // refresh/remove/evict em O(1). Antes, cada re-put de chave
+        // existente varria e movia memória num ArrayList `order` inteiro —
+        // O(n) por evento em stores ilimitados de guilds grandes. A ordem
+        // observável (`first`/`last`/`at`) é a mesma: inserção, com re-put
+        // movendo a chave para o fim (recência).
+        head: ?K = null,
+        tail: ?K = null,
 
         pub fn init(allocator: std.mem.Allocator, limit: ?usize) Self {
-            var self = Self{ .allocator = allocator, .limit = limit };
-            // Pré-dimensiona a fila de evicção: evita reallocs no caminho
-            // quente sem custo de rehash do mapa.
-            if (limit) |l| {
-                if (l > 0 and l <= 65536) {
-                    self.order.ensureTotalCapacity(allocator, l) catch {};
-                }
-            }
-            return self;
+            return .{ .allocator = allocator, .limit = limit };
         }
 
         pub fn deinit(self: *Self) void {
             var it = self.entries.valueIterator();
             while (it.next()) |entry| {
-                var owned = entry.*;
+                var owned = entry.parsed;
                 owned.deinit();
             }
             self.entries.deinit(self.allocator);
-            self.order.deinit(self.allocator);
+            self.* = .{ .allocator = self.allocator, .limit = self.limit };
         }
 
         pub fn setLimit(self: *Self, limit: ?usize) void {
             self.limit = limit;
-            if (limit) |l| {
-                if (l > 0 and l <= 65536) {
-                    self.order.ensureTotalCapacity(self.allocator, l) catch {};
-                }
-            }
             self.enforce();
         }
 
@@ -187,28 +186,31 @@ pub fn Store(comptime K: type, comptime V: type) type {
 
         pub fn get(self: *const Self, key: K) ?*const V {
             const entry = self.entries.getPtr(key) orelse return null;
-            return &entry.value;
+            return &entry.parsed.value;
         }
 
         pub fn first(self: *const Self) ?*const V {
-            if (self.order.items.len == 0) return null;
-            return self.get(self.order.items[0]);
+            return self.get(self.head orelse return null);
         }
 
         pub fn last(self: *const Self) ?*const V {
-            if (self.order.items.len == 0) return null;
-            return self.get(self.order.items[self.order.items.len - 1]);
+            return self.get(self.tail orelse return null);
         }
 
         pub fn at(self: *const Self, index: usize) ?*const V {
-            if (index >= self.order.items.len) return null;
-            return self.get(self.order.items[index]);
+            var key = self.head orelse return null;
+            var i: usize = 0;
+            while (i < index) : (i += 1) {
+                const entry = self.entries.getPtr(key) orelse return null;
+                key = entry.next orelse return null;
+            }
+            return self.get(key);
         }
 
         pub fn find(self: *const Self, ctx: anytype, comptime match: fn (@TypeOf(ctx), *const V) bool) ?*const V {
             var it = self.entries.valueIterator();
             while (it.next()) |entry| {
-                if (match(ctx, &entry.*.value)) return &entry.*.value;
+                if (match(ctx, &entry.parsed.value)) return &entry.parsed.value;
             }
             return null;
         }
@@ -223,8 +225,8 @@ pub fn Store(comptime K: type, comptime V: type) type {
             errdefer result.deinit(allocator);
             var it = self.entries.valueIterator();
             while (it.next()) |entry| {
-                if (predicate(ctx, &entry.*.value)) {
-                    try result.append(allocator, &entry.*.value);
+                if (predicate(ctx, &entry.parsed.value)) {
+                    try result.append(allocator, &entry.parsed.value);
                 }
             }
             return result;
@@ -242,7 +244,7 @@ pub fn Store(comptime K: type, comptime V: type) type {
             try result.ensureTotalCapacity(allocator, self.entries.count());
             var it = self.entries.valueIterator();
             while (it.next()) |entry| {
-                result.appendAssumeCapacity(transform(ctx, &entry.*.value));
+                result.appendAssumeCapacity(transform(ctx, &entry.parsed.value));
             }
             return result;
         }
@@ -270,10 +272,10 @@ pub fn Store(comptime K: type, comptime V: type) type {
 
             var it = self.entries.valueIterator();
             while (it.next()) |entry| {
-                if (predicate(ctx, &entry.*.value)) {
-                    try matches.append(allocator, &entry.*.value);
+                if (predicate(ctx, &entry.parsed.value)) {
+                    try matches.append(allocator, &entry.parsed.value);
                 } else {
-                    try non_matches.append(allocator, &entry.*.value);
+                    try non_matches.append(allocator, &entry.parsed.value);
                 }
             }
             return .{
@@ -289,7 +291,7 @@ pub fn Store(comptime K: type, comptime V: type) type {
         ) bool {
             var it = self.entries.valueIterator();
             while (it.next()) |entry| {
-                if (!predicate(ctx, &entry.*.value)) return false;
+                if (!predicate(ctx, &entry.parsed.value)) return false;
             }
             return true;
         }
@@ -301,7 +303,7 @@ pub fn Store(comptime K: type, comptime V: type) type {
         ) bool {
             var it = self.entries.valueIterator();
             while (it.next()) |entry| {
-                if (predicate(ctx, &entry.*.value)) return true;
+                if (predicate(ctx, &entry.parsed.value)) return true;
             }
             return false;
         }
@@ -316,47 +318,46 @@ pub fn Store(comptime K: type, comptime V: type) type {
             var owned: ?std.json.Parsed(V) = parsed;
             errdefer if (owned) |*p| p.deinit();
             if (self.entries.getPtr(key)) |existing| {
-                try self.refresh(key);
-                existing.deinit();
-                existing.* = owned.?;
+                // Re-put: desliga da lista e religa no fim — O(1), sem scan.
+                self.unlink(existing);
+                existing.parsed.deinit();
+                existing.parsed = owned.?;
                 owned = null;
+                self.linkTail(key, existing);
             } else {
-                try self.entries.put(self.allocator, key, owned.?);
+                try self.entries.put(self.allocator, key, .{ .parsed = owned.? });
                 owned = null;
                 errdefer {
                     if (self.entries.getPtr(key)) |e| {
-                        var doomed = e.*;
+                        var doomed = e.parsed;
                         doomed.deinit();
                     }
                     _ = self.entries.remove(key);
                 }
-                try self.order.append(self.allocator, key);
+                const entry = self.entries.getPtr(key).?;
+                self.linkTail(key, entry);
             }
             self.enforce();
         }
 
         pub fn remove(self: *Self, key: K) bool {
             const entry = self.entries.getPtr(key) orelse return false;
-            var owned = entry.*;
+            self.unlink(entry);
+            var owned = entry.parsed;
             owned.deinit();
             _ = self.entries.remove(key);
-            for (self.order.items, 0..) |k, i| {
-                if (k == key) {
-                    _ = self.order.orderedRemove(i);
-                    break;
-                }
-            }
             return true;
         }
 
         pub fn clear(self: *Self) void {
             var it = self.entries.valueIterator();
             while (it.next()) |entry| {
-                var owned = entry.*;
+                var owned = entry.parsed;
                 owned.deinit();
             }
             self.entries.clearRetainingCapacity();
-            self.order.clearRetainingCapacity();
+            self.head = null;
+            self.tail = null;
         }
 
         pub fn sweep(self: *Self, ctx: anytype, comptime keep: fn (@TypeOf(ctx), *const V) bool) usize {
@@ -364,7 +365,7 @@ pub fn Store(comptime K: type, comptime V: type) type {
             defer doomed.deinit(self.allocator);
             var it = self.entries.iterator();
             while (it.next()) |kv| {
-                if (!keep(ctx, &kv.value_ptr.*.value)) {
+                if (!keep(ctx, &kv.value_ptr.parsed.value)) {
                     doomed.append(self.allocator, kv.key_ptr.*) catch break;
                 }
             }
@@ -372,33 +373,42 @@ pub fn Store(comptime K: type, comptime V: type) type {
             return doomed.items.len;
         }
 
-        pub fn iterator(self: *Self) std.AutoHashMapUnmanaged(K, std.json.Parsed(V)).Iterator {
+        pub fn iterator(self: *Self) std.AutoHashMapUnmanaged(K, Entry).Iterator {
             return self.entries.iterator();
         }
 
-        fn refresh(self: *Self, key: K) !void {
-            for (self.order.items, 0..) |k, i| {
-                if (k == key) {
-                    _ = self.order.orderedRemove(i);
-                    break;
-                }
+        fn unlink(self: *Self, entry: *Entry) void {
+            if (entry.prev) |p| {
+                if (self.entries.getPtr(p)) |pe| pe.next = entry.next;
+            } else {
+                self.head = entry.next;
             }
-            try self.order.append(self.allocator, key);
+            if (entry.next) |n| {
+                if (self.entries.getPtr(n)) |ne| ne.prev = entry.prev;
+            } else {
+                self.tail = entry.prev;
+            }
+            entry.prev = null;
+            entry.next = null;
+        }
+
+        fn linkTail(self: *Self, key: K, entry: *Entry) void {
+            entry.prev = self.tail;
+            entry.next = null;
+            if (self.tail) |t| {
+                if (self.entries.getPtr(t)) |te| te.next = key;
+            }
+            self.tail = key;
+            if (self.head == null) self.head = key;
         }
 
         fn enforce(self: *Self) void {
             const limit = self.limit orelse return;
-            // Evicção sempre pela cabeça (mais antigo): remove direto sem a
-            // busca linear de `remove`, que seria O(n) por item evictado.
+            // Evicção pela cabeça (mais antigo). `remove` é O(1) agora,
+            // então o caminho especial de evicção não é mais necessário.
             while (self.entries.count() > limit) {
-                if (self.order.items.len == 0) return;
-                const oldest = self.order.items[0];
-                if (self.entries.getPtr(oldest)) |entry| {
-                    var owned = entry.*;
-                    owned.deinit();
-                }
-                _ = self.entries.remove(oldest);
-                _ = self.order.orderedRemove(0);
+                const oldest = self.head orelse return;
+                _ = self.remove(oldest);
             }
         }
     };
@@ -494,6 +504,25 @@ pub const Cache = struct {
         self.threads.clear();
         self.emojis.clear();
         self.presences.clear();
+    }
+
+    /// Indica se `update` faria algo para `t` (tipo suportado + store
+    /// habilitado). Espelha exatamente as condições do switch de `update`.
+    /// Usado pelo dispatcher para pular o parse do envelope de eventos que
+    /// nem o cache nem handlers querem.
+    pub fn wantsUpdate(self: *const Cache, t: events.Type) bool {
+        return switch (t) {
+            .message_create, .message_update, .message_delete => !storeDisabled(self.messages.limit),
+            .channel_create, .channel_update, .channel_delete => !storeDisabled(self.channels.limit),
+            .guild_create, .guild_update, .guild_delete => !storeDisabled(self.guilds.limit),
+            .guild_member_add, .guild_member_update, .guild_member_remove, .guild_members_chunk => !storeDisabled(self.members.limit),
+            .user_update => !storeDisabled(self.users.limit),
+            .presence_update => !storeDisabled(self.presences.limit),
+            .guild_role_create, .guild_role_update, .guild_role_delete => !storeDisabled(self.roles.limit),
+            .thread_create, .thread_update, .thread_delete => !storeDisabled(self.threads.limit),
+            .guild_emojis_update => !storeDisabled(self.emojis.limit),
+            else => false,
+        };
     }
 
     pub fn update(self: *Cache, t: events.Type, d: std.json.Value) !void {
