@@ -215,7 +215,7 @@ pub fn resolveChannelPermissions(base: u64, user_id: []const u8, role_ids: []con
     if (has(base, administrator)) return all();
     var bits = base;
     for (overwrites) |o| {
-        if (o.@"type" != @intFromEnum(schema.OverwriteType.role)) continue;
+        if (o.type != @intFromEnum(schema.OverwriteType.role)) continue;
         if (!std.mem.eql(u8, o.id, guild_id)) continue;
         bits = applyOverwrite(bits, parse(o.allow), parse(o.deny));
     }
@@ -223,7 +223,7 @@ pub fn resolveChannelPermissions(base: u64, user_id: []const u8, role_ids: []con
     var deny: u64 = 0;
     for (role_ids) |role_id| {
         for (overwrites) |o| {
-            if (o.@"type" != @intFromEnum(schema.OverwriteType.role)) continue;
+            if (o.type != @intFromEnum(schema.OverwriteType.role)) continue;
             if (!std.mem.eql(u8, o.id, role_id)) continue;
             allow |= parse(o.allow);
             deny |= parse(o.deny);
@@ -231,7 +231,7 @@ pub fn resolveChannelPermissions(base: u64, user_id: []const u8, role_ids: []con
     }
     bits = (bits & ~deny) | allow;
     for (overwrites) |o| {
-        if (o.@"type" != @intFromEnum(schema.OverwriteType.member)) continue;
+        if (o.type != @intFromEnum(schema.OverwriteType.member)) continue;
         if (!std.mem.eql(u8, o.id, user_id)) continue;
         bits = applyOverwrite(bits, parse(o.allow), parse(o.deny));
     }
@@ -242,8 +242,11 @@ pub fn resolveMember(roles: []const schema.Role, member: schema.GuildMember, own
     const user = member.user orelse return 0;
     if (std.mem.eql(u8, user.id, owner_id)) return all();
     var bits: u64 = 0;
-    for (member.roles) |role_id| {
-        for (roles) |role| {
+    // Varre os cargos da guild testando a participação do membro no laço
+    // interno (member.roles é curto): parse das permissões só em matches,
+    // em vez de 1 parse por cargo do membro em cada scan da guild.
+    for (roles) |role| {
+        for (member.roles) |role_id| {
             if (std.mem.eql(u8, role.id, role_id)) {
                 bits |= parse(role.permissions);
                 break;
