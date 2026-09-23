@@ -271,7 +271,7 @@ pub const GuildChannels = struct {
         const g = self.guild();
         var it = g.client.cache.channels.iterator();
         while (it.next()) |kv| {
-            const chan = &kv.value_ptr.*.value;
+            const chan = &kv.value_ptr.parsed.value;
             if (chan.guild_id) |gid| {
                 if (!std.mem.eql(u8, gid, g.id)) continue;
             } else continue;

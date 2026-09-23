@@ -173,8 +173,10 @@ pub const PermissionOverwrites = struct {
     }
 
     pub fn edit(self: *PermissionOverwrites, overwrites: anytype) !void {
-        var parsed = try self.set(overwrites, null);
-        parsed.deinit();
+        const c = self.channel();
+        // Caminho void: antes passava pelo `set`, que parseava o Canal de
+        // resposta inteiro só para descartá-lo em seguida.
+        return c.client.rest.editChannelFullVoid(c.id, .{ .permission_overwrites = overwrites }, null);
     }
 
     pub fn editTarget(self: *PermissionOverwrites, target_id: []const u8, kind: schema.OverwriteType, allow: u64, deny: u64, reason: ?[]const u8) !void {
@@ -189,8 +191,8 @@ pub const PermissionOverwrites = struct {
             const K = @TypeOf(options.kind);
             break :blk if (K == schema.OverwriteType) options.kind else @enumFromInt(options.kind);
         } else if (@hasField(O, "type")) blk: {
-            const TP = @TypeOf(options.@"type");
-            break :blk if (TP == schema.OverwriteType) options.@"type" else @enumFromInt(options.@"type");
+            const TP = @TypeOf(options.type);
+            break :blk if (TP == schema.OverwriteType) options.type else @enumFromInt(options.type);
         } else .role;
         const allow = if (@hasField(O, "allow")) client_mod.Rest.parsePermissionValue(options.allow) else 0;
         const deny = if (@hasField(O, "deny")) client_mod.Rest.parsePermissionValue(options.deny) else 0;

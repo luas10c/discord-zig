@@ -102,7 +102,10 @@ pub const Rest = struct {
     pub const max_rate_limit_retries: u32 = 3;
     pub const max_retry_wait_ms: u64 = 30000;
     pub const default_timeout_ns: u64 = 15 * std.time.ns_per_s;
-    pub const timeout_poll_ms: i64 = 1;
+    // Quantum do loop de espera do fetch assíncrono: 10ms em vez de 1ms =
+    // ~100x menos wakeups por request (pior caso +10ms de overshoot num
+    // timeout de 15s — imperceptível).
+    pub const timeout_poll_ms: i64 = 10;
     pub const max_idle_pool_ms: i64 = 25000;
 
     pub fn request(
@@ -616,7 +619,8 @@ pub const Rest = struct {
         return parseBody(schema.Message, self.allocator, res.status_code, res.body);
     }
 
-    pub fn createMessage(self: *Rest, channel_id: []const u8, content: []const u8) !std.json.Parsed(schema.Message) {        const body = try std.json.Stringify.valueAlloc(self.allocator, .{ .content = content }, .{});
+    pub fn createMessage(self: *Rest, channel_id: []const u8, content: []const u8) !std.json.Parsed(schema.Message) {
+        const body = try std.json.Stringify.valueAlloc(self.allocator, .{ .content = content }, .{});
         defer self.allocator.free(body);
         const path = try std.fmt.allocPrint(self.allocator, "/channels/{s}/messages", .{channel_id});
         defer self.allocator.free(path);
@@ -1227,8 +1231,8 @@ pub const Rest = struct {
             const K = @TypeOf(item.kind);
             break :blk if (K == schema.OverwriteType) @intFromEnum(item.kind) else @as(u8, @intCast(item.kind));
         } else if (@hasField(IT, "type")) blk: {
-            const TP = @TypeOf(item.@"type");
-            break :blk if (TP == schema.OverwriteType) @intFromEnum(item.@"type") else @as(u8, @intCast(item.@"type"));
+            const TP = @TypeOf(item.type);
+            break :blk if (TP == schema.OverwriteType) @intFromEnum(item.type) else @as(u8, @intCast(item.type));
         } else 0;
         try jw.objectField("type");
         try jw.write(item_type);
@@ -1336,7 +1340,7 @@ pub const Rest = struct {
         const name = optStr(O, options, "name") orelse return error.InvalidChannelOptions;
         if (name.len == 0) return error.InvalidChannelOptions;
         const kind: schema.ChannelType = if (@hasField(O, "type"))
-            parseChannelType(options.@"type")
+            parseChannelType(options.type)
         else if (@hasField(O, "kind"))
             parseChannelType(options.kind)
         else
@@ -1392,9 +1396,9 @@ pub const Rest = struct {
         return parseBody(schema.Channel, self.allocator, res.status_code, res.body);
     }
 
-    pub fn editChannelFull(self: *Rest, channel_id: []const u8, options: anytype, reason: ?[]const u8) !std.json.Parsed(schema.Channel) {
+    fn editChannelFullBody(allocator: std.mem.Allocator, options: anytype) ![]u8 {
         const O = @TypeOf(options);
-        var out: std.Io.Writer.Allocating = .init(self.allocator);
+        var out: std.Io.Writer.Allocating = .init(allocator);
         errdefer out.deinit();
         var jw: std.json.Stringify = .{ .writer = &out.writer, .options = .{} };
         try jw.beginObject();
@@ -1434,7 +1438,12 @@ pub const Rest = struct {
             try writePermissionOverwrites(&jw, options.permissionOverwrites);
         }
         try jw.endObject();
-        const body = try out.toOwnedSlice();
+        return out.toOwnedSlice();
+    }
+
+    pub fn editChannelFull(self: *Rest, channel_id: []const u8, options: anytype, reason: ?[]const u8) !std.json.Parsed(schema.Channel) {
+        const O = @TypeOf(options);
+        const body = try editChannelFullBody(self.allocator, options);
         defer self.allocator.free(body);
         const path = try std.fmt.allocPrint(self.allocator, "/channels/{s}", .{channel_id});
         defer self.allocator.free(path);
@@ -1443,6 +1452,20 @@ pub const Rest = struct {
         defer self.allocator.free(res.body);
         try ensureSuccess(res);
         return parseBody(schema.Channel, self.allocator, res.status_code, res.body);
+    }
+
+    /// Mesma requisição do `editChannelFull`, sem parsear a resposta — para
+    /// chamadores que descartariam o Canal retornado (ex.: `PermissionOverwrites.edit`).
+    pub fn editChannelFullVoid(self: *Rest, channel_id: []const u8, options: anytype, reason: ?[]const u8) !void {
+        const O = @TypeOf(options);
+        const body = try editChannelFullBody(self.allocator, options);
+        defer self.allocator.free(body);
+        const path = try std.fmt.allocPrint(self.allocator, "/channels/{s}", .{channel_id});
+        defer self.allocator.free(path);
+        const audit_reason = reason orelse optStr(O, options, "reason");
+        const res = try self.requestFull(.PATCH, path, body, "application/json", audit_reason);
+        defer self.allocator.free(res.body);
+        try ensureSuccess(res);
     }
 
     pub fn setChannelPermissions(self: *Rest, channel_id: []const u8, overwrites: anytype, reason: ?[]const u8) !std.json.Parsed(schema.Channel) {
@@ -1833,7 +1856,6 @@ pub const Rest = struct {
         const iso = formatters.formatIso8601(real_now + duration_seconds, &buf);
         return self.timeoutMember(guild_id, user_id, iso, reason);
     }
-
 
     pub fn setMemberMute(self: *Rest, guild_id: []const u8, user_id: []const u8, mute: bool, reason: ?[]const u8) !std.json.Parsed(schema.GuildMember) {
         const body = try std.json.Stringify.valueAlloc(self.allocator, .{ .mute = mute }, .{});
@@ -2853,6 +2875,10 @@ pub const Client = struct {
     application: ClientApplication = .{},
     presence_request: ?gateway.PresenceData = null,
     collectors: std.ArrayListUnmanaged(*collector_mod.InteractionCollector) = .empty,
+    // user_id -> dm_channel_id: `User.send` não reabre o canal de DM (2
+    // round-trips + 1 parse descartável) a cada envio. Se o canal memoizado
+    // falhar (ex.: DM fechado), a entrada é descartada e o DM reaberto.
+    dm_channels: std.AutoHashMapUnmanaged(u64, u64) = .empty,
     user_loaded: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, config: anytype) Client {
@@ -2887,6 +2913,7 @@ pub const Client = struct {
     pub fn deinit(self: *Client) void {
         for (self.collectors.items) |c| self.allocator.destroy(c);
         self.collectors.deinit(self.allocator);
+        self.dm_channels.deinit(self.allocator);
         if (self.user_loaded) {
             self.allocator.free(self.user.id);
             self.allocator.free(self.user.username);
@@ -2944,6 +2971,7 @@ pub const Client = struct {
     pub fn serveForever(self: *Client) !void {
         var attempt: u32 = 0;
         while (true) {
+            const started_ms = util.nowMs(self.io);
             self.serveOnce() catch |err| switch (err) {
                 error.GatewayReconnect,
                 error.GatewayReidentify,
@@ -2952,9 +2980,12 @@ pub const Client = struct {
                 error.HeartbeatTimeout,
                 error.NoHello,
                 => {
-                    const delay = util.backoffMs(attempt);
-                    attempt = @min(attempt + 1, 16);
-                    try self.io.sleep(.{ .nanoseconds = @as(i96, delay) * std.time.ns_per_ms }, .awake);
+                    // Conexão estável (viveu >= 60s) reseta o backoff: quedas
+                    // rotineiras de LB (ex.: 1001 Going Away depois de dias
+                    // online) reconectam em ~1s em vez de até 30s.
+                    const nb = util.backoffAfterDrop(attempt, util.nowMs(self.io) - started_ms);
+                    attempt = nb.attempt;
+                    try self.io.sleep(.{ .nanoseconds = @as(i96, nb.delay_ms) * std.time.ns_per_ms }, .awake);
                     continue;
                 },
                 // Quedas de transporte no meio da sessão (FIN silencioso,
@@ -2969,9 +3000,9 @@ pub const Client = struct {
                 error.ConnectionResetByPeer,
                 => {
                     std.log.warn("discord: gateway transport drop ({any}), reconnecting", .{err});
-                    const delay = util.backoffMs(attempt);
-                    attempt = @min(attempt + 1, 16);
-                    try self.io.sleep(.{ .nanoseconds = @as(i96, delay) * std.time.ns_per_ms }, .awake);
+                    const nb = util.backoffAfterDrop(attempt, util.nowMs(self.io) - started_ms);
+                    attempt = nb.attempt;
+                    try self.io.sleep(.{ .nanoseconds = @as(i96, nb.delay_ms) * std.time.ns_per_ms }, .awake);
                     continue;
                 },
                 else => return err,
@@ -3062,6 +3093,21 @@ pub const Client = struct {
                 self.allocator.free(r.query);
                 self.member_request = null;
             }
+
+            // Timeout de leitura adaptativo: no máximo 1s (para o flush de
+            // presence/member requests), ou o que faltar até o próximo
+            // heartbeat vencer — o heartbeat sai na hora em vez de até 1s
+            // atrasado. `requested` (o servidor pediu heartbeat via op 1)
+            // também acorda já.
+            const now_ms = util.nowMs(self.io);
+            const due_in: i64 = s.hb.next_ms - now_ms;
+            const read_timeout: u32 = if (s.hb.requested or due_in <= 0)
+                1
+            else if (due_in < 1000)
+                @intCast(due_in)
+            else
+                1000;
+            socket.setReadTimeout(read_timeout);
         }
     }
 
@@ -3146,7 +3192,10 @@ pub const Client = struct {
             const want_collectors = self.collectors.items.len > 0;
             if (want_collectors or slot.on != null or slot.once != null) {
                 // Parse único: alimenta collectors e o handler com o mesmo valor.
-                var parsed_inter = std.json.parseFromValue(schema.Interaction, self.allocator, value, .{ .ignore_unknown_fields = true }) catch |err| {
+                // `alloc_if_needed` explícito: as strings emprestam o `Value`
+                // do envelope (vivo durante todo o dispatch síncrono) — zero
+                // dupes no evento mais frequente de bots com slash commands.
+                var parsed_inter = std.json.parseFromValue(schema.Interaction, self.allocator, value, .{ .ignore_unknown_fields = true, .allocate = .alloc_if_needed }) catch |err| {
                     const raw_json = std.json.Stringify.valueAlloc(self.allocator, value, .{}) catch "<?>";
                     defer if (!std.mem.eql(u8, raw_json, "<?>")) self.allocator.free(raw_json);
                     std.log.warn("discord: failed to parse payload for event interaction_create: {any}\nPayload: {s}", .{ err, raw_json });
@@ -3187,7 +3236,12 @@ pub const Client = struct {
                     self.dispatch(tag, {});
                     return;
                 }
-                var parsed = std.json.parseFromValue(P, self.allocator, value, .{ .ignore_unknown_fields = true }) catch |err| {
+                // `alloc_if_needed` explícito: o payload empresta as strings
+                // do `Value` do envelope, que vive até o fim do dispatch
+                // síncrono (o contrato de vida é o mesmo de antes: válido
+                // apenas durante o handler). Remove um dupe completo de
+                // cada string por evento despachado.
+                var parsed = std.json.parseFromValue(P, self.allocator, value, .{ .ignore_unknown_fields = true, .allocate = .alloc_if_needed }) catch |err| {
                     std.log.warn("discord: failed to parse payload for event {s}: {any}", .{ @tagName(tag), err });
                     return;
                 };
@@ -3195,18 +3249,50 @@ pub const Client = struct {
                 self.dispatch(tag, parsed.value);
             },
         }
+    }
 
+    /// Um evento é "querido" se há handler/collector registrado ou se o
+    /// cache vai processá-lo. READY é sempre querido (alimenta
+    /// session_id/user mesmo sem handler).
+    fn eventWanted(self: *Client, t: events.Type) bool {
+        if (t == .ready) return true;
+        switch (t) {
+            .interaction_create => {
+                const slot = &@field(self.handlers, "interaction_create");
+                return self.collectors.items.len > 0 or slot.on != null or slot.once != null;
+            },
+            inline else => |tag| {
+                const slot = &@field(self.handlers, @tagName(tag));
+                if (slot.on != null or slot.once != null) return true;
+                return self.cache.wantsUpdate(t);
+            },
+        }
     }
 
     fn handleEnvelope(self: *Client, text: []const u8) !void {
+        const s = &self.session;
+        // Cabeçalho barato (op/s/t): o scanner pula a subárvore `d` sem
+        // alocar. Se nenhum handler/collector/cache quer o evento, o parse
+        // completo do payload — o custo dominante por evento — é evitado:
+        // tráfego de intents que o bot não consome passa a ser quase
+        // gratuito (ex.: TYPING_START/PRESENCE_UPDATE sem handler).
+        var head = try gateway.decodeHead(self.allocator, text);
+        defer head.deinit();
+        const op = gateway.Op.fromInt(head.value.op);
+        if (op == .Dispatch) {
+            s.trackDispatch(head.value.s);
+            const t = events.classify(head.value.t);
+            if (!self.eventWanted(t)) return;
+            var env = try gateway.decode(self.allocator, text);
+            defer env.deinit();
+            try self.dispatchValue(t, env.value.d);
+            return;
+        }
+        // Ops de controle (heartbeat/reconnect/invalid_session/hello/ack)
+        // são raros: decode completo como antes.
         var env = try gateway.decode(self.allocator, text);
         defer env.deinit();
-        const s = &self.session;
-        switch (gateway.Op.fromInt(env.value.op)) {
-            .dispatch => {
-                s.trackDispatch(env.value.s);
-                try self.dispatchValue(events.classify(env.value.t), env.value.d);
-            },
+        switch (op) {
             .heartbeat => {
                 s.hb.request();
             },

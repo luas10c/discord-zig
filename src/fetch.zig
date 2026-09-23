@@ -37,6 +37,18 @@ pub fn multipart(allocator: std.mem.Allocator, payload_json: []const u8, files: 
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
+    // Pré-calcula o tamanho exato do corpo: 1 alocação, sem o custo de
+    // crescimento por realloc (que copiaria anexos inteiros de novo).
+    const payload_part_fmt = "--{s}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n";
+    const file_part_fmt = "--{s}\r\nContent-Disposition: form-data; name=\"{s}\"; filename=\"{s}\"\r\nContent-Type: {s}\r\n\r\n";
+    const tail_fmt = "--{s}--\r\n";
+    var total: usize = payload_part_fmt.len - 3 + boundary.len + payload_json.len + 2;
+    for (files) |f| {
+        total += file_part_fmt.len - 12 + boundary.len + f.name.len + f.filename.len + f.content_type.len + f.data.len + 2;
+    }
+    total += tail_fmt.len - 3 + boundary.len;
+    try out.ensureTotalCapacity(total);
+
     const w = &out.writer;
     try w.print("--{s}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n", .{boundary});
     try w.writeAll(payload_json);
@@ -152,6 +164,11 @@ pub fn fetch(
         var reader = head.reader(&transfer_buffer);
         var out: std.Io.Writer.Allocating = .init(allocator);
         errdefer out.deinit();
+        // Reserva o Content-Length conhecido: sem isso o writer cresce por
+        // realloc e copia a resposta ~2x a mais na memória.
+        if (head.head.content_length) |cl| {
+            out.ensureTotalCapacity(std.math.cast(usize, cl) orelse 0) catch {};
+        }
         _ = try reader.streamRemaining(&out.writer);
         body = try out.toOwnedSlice();
     } else {

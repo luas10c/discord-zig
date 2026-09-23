@@ -64,6 +64,20 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8) !std.json.Parsed(P
     return std.json.parseFromSlice(Payload, allocator, text, .{ .ignore_unknown_fields = true });
 }
 
+/// Cabeçalho do envelope (op/s/t) sem materializar `d`: com
+/// `ignore_unknown_fields`, o scanner pula a subárvore de `d` sem alocar.
+/// Usado pelo dispatcher para decidir se o evento interessa antes de pagar
+/// o parse completo do payload (o custo dominante por evento).
+pub const EnvelopeHead = struct {
+    op: u8,
+    s: ?i64 = null,
+    t: ?[]const u8 = null,
+};
+
+pub fn decodeHead(allocator: std.mem.Allocator, text: []const u8) !std.json.Parsed(EnvelopeHead) {
+    return std.json.parseFromSlice(EnvelopeHead, allocator, text, .{ .ignore_unknown_fields = true });
+}
+
 pub fn encodeHeartbeat(allocator: std.mem.Allocator, seq: ?i64) ![]u8 {
     if (seq) |s| {
         return std.fmt.allocPrint(allocator, "{{\"op\":1,\"d\":{d}}}", .{s});

@@ -41,9 +41,29 @@ pub const User = struct {
     }
 
     pub fn send(self: User, content: []const u8) !std.json.Parsed(schema.Message) {
-        var dm = try self.client.rest.createDM(self.id);
+        const c = self.client;
+        const user_key = std.fmt.parseInt(u64, self.id, 10) catch null;
+        if (user_key) |k| {
+            if (c.dm_channels.get(k)) |channel_id| {
+                var id_buf: [24]u8 = undefined;
+                const channel_text = std.fmt.bufPrint(&id_buf, "{d}", .{channel_id}) catch unreachable;
+                if (c.rest.createMessage(channel_text, content)) |msg| {
+                    return msg;
+                } else |_| {
+                    // Canal memoizado morreu (ex.: DM fechado): descarta a
+                    // memoização e reabre abaixo.
+                    _ = c.dm_channels.remove(k);
+                }
+            }
+        }
+        var dm = try c.rest.createDM(self.id);
         defer dm.deinit();
-        return self.client.rest.createMessage(dm.value.id, content);
+        if (user_key) |k| {
+            if (std.fmt.parseInt(u64, dm.value.id, 10) catch null) |dm_key| {
+                c.dm_channels.put(c.allocator, k, dm_key) catch {};
+            }
+        }
+        return c.rest.createMessage(dm.value.id, content);
     }
 };
 

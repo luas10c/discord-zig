@@ -1,6 +1,7 @@
 const std = @import("std");
 const schema = @import("./schema.zig");
 const client_mod = @import("./client.zig");
+const cache_mod = @import("./cache.zig");
 const permission = @import("./permission.zig");
 
 pub const Member = struct {
@@ -38,19 +39,36 @@ pub const Member = struct {
         return self.client.rest.timeoutMemberDuration(self.guild_id, self.user_id, duration_seconds, reason);
     }
 
-
     pub fn presence(self: Member) ?*const schema.Presence {
         const key = std.fmt.parseInt(u64, self.user_id, 10) catch return null;
         return self.client.cache.presences.get(key);
     }
 
+    /// Membro do cache, se presente (guild_members habilitado). Sem cache ou
+    /// sem a entrada, retorna null e o chamador recorre ao REST.
+    fn cachedMember(self: Member) ?*const schema.GuildMember {
+        const guild = std.fmt.parseInt(u64, self.guild_id, 10) catch return null;
+        const user = std.fmt.parseInt(u64, self.user_id, 10) catch return null;
+        return self.client.cache.members.get(cache_mod.memberKey(guild, user));
+    }
+
     pub fn permissions(self: Member, guild_roles: []const schema.Role, owner_id: []const u8) !u64 {
+        // Cache-first (mesmo modelo do discord.js `GuildMember.permissions`):
+        // evita uma requisição REST + parse por checagem. O cache é mantido
+        // pelos eventos de gateway; sem a entrada, cai para o REST como antes.
+        if (self.cachedMember()) |member| {
+            return permission.resolveMember(guild_roles, member.*, owner_id);
+        }
         var fetched = try self.fetch();
         defer fetched.deinit();
         return permission.resolveMember(guild_roles, fetched.value, owner_id);
     }
 
     pub fn permissionsIn(self: Member, channel: schema.Channel, guild_roles: []const schema.Role, owner_id: []const u8) !u64 {
+        if (self.cachedMember()) |member| {
+            const base = permission.resolveMember(guild_roles, member.*, owner_id);
+            return permission.resolveChannelPermissions(base, self.user_id, member.roles, self.guild_id, channel.permission_overwrites);
+        }
         var fetched = try self.fetch();
         defer fetched.deinit();
         const base = permission.resolveMember(guild_roles, fetched.value, owner_id);

@@ -90,7 +90,7 @@ fn dupeComponent(allocator: std.mem.Allocator, c: schema.Component) !schema.Comp
         for (c.default_values, 0..) |dv, i| {
             dvs[i] = .{
                 .id = try allocator.dupe(u8, dv.id),
-                .@"type" = try allocator.dupe(u8, dv.@"type"),
+                .type = try allocator.dupe(u8, dv.type),
             };
         }
         out.default_values = dvs;
@@ -415,7 +415,7 @@ pub const EntitySelectBuilder = struct {
         const aa = self.arena.allocator();
         try self.default_values.append(aa, .{
             .id = try aa.dupe(u8, id),
-            .@"type" = try aa.dupe(u8, kind),
+            .type = try aa.dupe(u8, kind),
         });
     }
 
@@ -757,9 +757,10 @@ pub const SectionBuilder = struct {
     }
 
     pub fn setAccessory(self: *SectionBuilder, accessory: schema.Component) !void {
-        const owned = try self.arena.allocator().create(schema.Component);
-        owned.* = try dupeComponent(self.arena.allocator(), accessory);
-        self.accessory = owned.*;
+        // Duplica direto no campo: antes alocava um nó na arena e o
+        // abandonava na hora (`build` recria o ponteiro de qualquer forma)
+        // — 1 alloc + 1 cópia de struct de ~300 bytes desperdiçados.
+        self.accessory = try dupeComponent(self.arena.allocator(), accessory);
     }
 
     pub fn build(self: *SectionBuilder) BuildError!schema.Component {
@@ -854,9 +855,9 @@ pub const LabelBuilder = struct {
     }
 
     pub fn setChild(self: *LabelBuilder, child: schema.Component) !void {
-        const owned = try self.arena.allocator().create(schema.Component);
-        owned.* = try dupeComponent(self.arena.allocator(), child);
-        self.child = owned.*;
+        // Duplica direto no campo: antes alocava um nó na arena e o
+        // abandonava na hora (`build` recria o ponteiro de qualquer forma).
+        self.child = try dupeComponent(self.arena.allocator(), child);
     }
 
     pub fn build(self: *LabelBuilder) BuildError!schema.Component {
