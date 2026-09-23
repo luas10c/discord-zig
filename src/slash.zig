@@ -468,7 +468,9 @@ pub fn deferReply(allocator: std.mem.Allocator, flags: anytype) ![]u8 {
 
 fn deferReplyBody(allocator: std.mem.Allocator, bits: u32) ![]u8 {
     if (bits == 0) {
-        return std.json.Stringify.valueAlloc(allocator, .{ .type = 5 }, .{});
+        // Corpo constante: dupe direto em vez de rodar o stringifier de
+        // reflexão por defer (um dos callbacks mais frequentes).
+        return allocator.dupe(u8, "{\"type\":5}");
     }
     return std.json.Stringify.valueAlloc(allocator, .{
         .type = 5,
@@ -477,7 +479,7 @@ fn deferReplyBody(allocator: std.mem.Allocator, bits: u32) ![]u8 {
 }
 
 pub fn pongResponse(allocator: std.mem.Allocator) ![]u8 {
-    return std.json.Stringify.valueAlloc(allocator, .{ .type = 1 }, .{});
+    return allocator.dupe(u8, "{\"type\":1}");
 }
 
 pub fn autocompleteBody(allocator: std.mem.Allocator, choices: []const schema.CommandChoice) ![]u8 {
@@ -678,7 +680,7 @@ pub const Interaction = struct {
     }
 
     pub fn deferUpdate(self: Interaction) !void {
-        const body = try std.json.Stringify.valueAlloc(self.alloc(), .{ .type = 6 }, .{});
+        const body = try self.alloc().dupe(u8, "{\"type\":6}");
         defer self.alloc().free(body);
         try self.rest.respondInteraction(self.id, self.token, body);
     }
