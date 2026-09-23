@@ -30,6 +30,10 @@ pub const Session = struct {
     pub fn deinit(self: *Session) void {
         if (self.session_id) |id| self.allocator.free(id);
         if (self.resume_url) |url| self.allocator.free(url);
+        // Zera depois de liberar: deinit/clearResume duplos viram no-ops
+        // em vez de double-free.
+        self.session_id = null;
+        self.resume_url = null;
     }
 
     pub fn intentsOrDefault(self: Session) u32 {
@@ -42,10 +46,17 @@ pub const Session = struct {
     }
 
     pub fn storeReady(self: *Session, session_id: []const u8, resume_url: []const u8) !void {
+        // Duplica antes de liberar: se o dupe falhar (OOM), os campos antigos
+        // continuam válidos em vez de apontarem para memória liberada
+        // (double-free no próximo deinit/clearResume).
+        const new_id = try self.allocator.dupe(u8, session_id);
+        errdefer self.allocator.free(new_id);
+        const new_url = try self.allocator.dupe(u8, resume_url);
+        errdefer self.allocator.free(new_url);
         if (self.session_id) |id| self.allocator.free(id);
         if (self.resume_url) |url| self.allocator.free(url);
-        self.session_id = try self.allocator.dupe(u8, session_id);
-        self.resume_url = try self.allocator.dupe(u8, resume_url);
+        self.session_id = new_id;
+        self.resume_url = new_url;
     }
 
     pub fn clearResume(self: *Session) void {
