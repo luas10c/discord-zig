@@ -712,6 +712,7 @@ const HttpScriptCtx = struct {
 
 const HttpScriptMode = enum {
     rate_limit_then_ok,
+    global_rate_limit_then_ok,
     blackhole,
 };
 
@@ -762,9 +763,12 @@ fn httpScriptRun(ctx: *HttpScriptCtx) !void {
         }
 
         switch (ctx.mode) {
-            .rate_limit_then_ok => {
+            .rate_limit_then_ok, .global_rate_limit_then_ok => {
                 if (ctx.hits == 1) {
-                    const body = "{\"message\":\"slow down\",\"retry_after\":0.01,\"global\":false}";
+                    const body = if (ctx.mode == .global_rate_limit_then_ok)
+                        "{\"message\":\"slow down\",\"retry_after\":0.05,\"global\":true}"
+                    else
+                        "{\"message\":\"slow down\",\"retry_after\":0.01,\"global\":false}";
                     var resp_buf: [256]u8 = undefined;
                     const resp = try std.fmt.bufPrint(&resp_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
                     try httpScriptWriteAll(io, &stream, resp);
@@ -843,6 +847,24 @@ test "rate limited request retries then succeeds" {
     try std.testing.expectEqualStrings("1", me.value.id);
     try std.testing.expect(setup.ctx.err == null);
     try std.testing.expectEqual(@as(usize, 2), setup.ctx.hits);
+}
+
+test "global rate limit is honored before retry" {
+    const allocator = std.testing.allocator;
+    const setup = try withHttpScript(.global_rate_limit_then_ok, 2);
+    defer destroyHttpScript(setup);
+
+    var rest = Rest.init(allocator, std.testing.io, "tok");
+    defer rest.deinit();
+    rest.base_url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{setup.port});
+    defer allocator.free(rest.base_url);
+
+    var me = try rest.getCurrentUser();
+    defer me.deinit();
+    try std.testing.expectEqualStrings("1", me.value.id);
+    try std.testing.expect(setup.ctx.err == null);
+    try std.testing.expectEqual(@as(usize, 2), setup.ctx.hits);
+    try std.testing.expect(rest.global_reset_at_ms > 0);
 }
 
 test "hung request fails fast with timeout" {
@@ -2555,4 +2577,3 @@ test "threads archived and members" {
     try std.testing.expectEqualStrings("/channels/C/threads/archived/public?limit=10", setup.ctx.reqs[0].pathStr());
     try std.testing.expectEqualStrings("/channels/C/threads/archived/private?before=100&limit=10", setup.ctx.reqs[1].pathStr());
 }
-

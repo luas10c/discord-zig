@@ -70,6 +70,7 @@ pub const Rest = struct {
     timeout_ns: ?u64 = default_timeout_ns,
     buckets: std.StringHashMapUnmanaged(RouteBucket) = .empty,
     last_request_ms: i64 = 0,
+    global_reset_at_ms: i64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, token: []const u8) Rest {
         return .{
@@ -81,6 +82,7 @@ pub const Rest = struct {
             .timeout_ns = default_timeout_ns,
             .buckets = .empty,
             .last_request_ms = 0,
+            .global_reset_at_ms = 0,
         };
     }
 
@@ -107,6 +109,13 @@ pub const Rest = struct {
     // timeout de 15s — imperceptível).
     pub const timeout_poll_ms: i64 = 10;
     pub const max_idle_pool_ms: i64 = 25000;
+
+    fn canRetryTransportFailure(method: std.http.Method) bool {
+        return switch (method) {
+            .GET, .HEAD, .OPTIONS, .TRACE, .PUT, .DELETE => true,
+            else => false,
+        };
+    }
 
     pub fn request(
         self: *Rest,
@@ -237,6 +246,10 @@ pub const Rest = struct {
         };
 
         const pre_now = util.nowMs(self.io);
+        if (pre_now < self.global_reset_at_ms) {
+            const sleep_ms: u64 = @intCast(self.global_reset_at_ms - pre_now);
+            try self.io.sleep(.{ .nanoseconds = @as(i96, sleep_ms) * std.time.ns_per_ms }, .awake);
+        }
         if (self.buckets.get(bucket_route)) |b| {
             if (b.remaining == 0 and pre_now < b.reset_at_ms) {
                 const sleep_ms = @as(u64, @intCast(b.reset_at_ms - pre_now));
@@ -257,7 +270,7 @@ pub const Rest = struct {
                 fetch_mod.fetch(&self.http, self.allocator, method, url_text, headers[0..header_count], body);
 
             var raw = raw_res catch |err| {
-                if (attempt == 0 and err != error.Timeout) {
+                if (attempt == 0 and err != error.Timeout and canRetryTransportFailure(method)) {
                     // Stale pooled connection race condition: purge pool and retry once fresh
                     fetch_mod.pruneAllConnections(&self.http.connection_pool, self.io);
                     attempt += 1;
@@ -306,6 +319,7 @@ pub const Rest = struct {
             }
 
             var retry_after: ?f64 = scanned.retry_after;
+            var global_rate_limit = scanned.global;
             if (retry_after == null and raw.status == .too_many_requests) {
                 const parsed = std.json.parseFromSlice(struct {
                     retry_after: f64 = 0,
@@ -315,9 +329,14 @@ pub const Rest = struct {
                     var owned = p;
                     defer owned.deinit();
                     retry_after = owned.value.retry_after;
+                    global_rate_limit = global_rate_limit or owned.value.global;
                 }
             }
 
+            if (raw.status == .too_many_requests and global_rate_limit) {
+                const wait_ms: u64 = @min(@as(u64, @intFromFloat((retry_after orelse 1.0) * 1000.0)), max_retry_wait_ms);
+                self.global_reset_at_ms = util.nowMs(self.io) + @as(i64, @intCast(wait_ms));
+            }
             if (raw.status == .too_many_requests and attempt < max_rate_limit_retries) {
                 const wait_ms: u64 = @min(@as(u64, @intFromFloat((retry_after orelse 1.0) * 1000.0)), max_retry_wait_ms);
                 self.allocator.free(raw.head_bytes);
