@@ -198,6 +198,31 @@ test "cert cache loads once and frees cleanly" {
     try std.testing.expect(cache2.loaded);
 }
 
+const CertEnsureWorker = struct {
+    cache: *websockets.CertCache,
+    err: ?anyerror = null,
+};
+
+fn ensureCertCache(worker: *CertEnsureWorker) void {
+    worker.cache.ensure(std.testing.io) catch |err| {
+        worker.err = err;
+    };
+}
+
+test "cert cache concurrent ensure is serialized" {
+    var cache = websockets.CertCache.init(std.heap.page_allocator);
+    defer cache.deinit();
+    var workers: [4]CertEnsureWorker = undefined;
+    var threads: [4]std.Thread = undefined;
+    for (&workers, &threads) |*worker, *thread| {
+        worker.* = .{ .cache = &cache };
+        thread.* = try std.Thread.spawn(.{}, ensureCertCache, .{worker});
+    }
+    for (&threads) |*thread| thread.join();
+    try std.testing.expect(cache.loaded);
+    for (workers) |worker| try std.testing.expect(worker.err == null);
+}
+
 test "full duplex against mock server" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;

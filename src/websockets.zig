@@ -35,6 +35,8 @@ pub const CertCache = struct {
     }
 
     pub fn ensure(self: *CertCache, io: Io) !void {
+        self.lock.lockUncancelable(io);
+        defer self.lock.unlock(io);
         if (self.loaded) return;
         var fresh: Bundle = .empty;
         errdefer fresh.deinit(self.gpa);
